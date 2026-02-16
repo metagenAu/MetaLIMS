@@ -95,7 +95,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST / - Create price list
   fastify.post('/', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('BILLING_ADMIN')],
   }, async (request, reply) => {
     try {
       const body = CreatePriceListSchema.parse(request.body);
@@ -177,7 +177,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // PATCH /:id - Update price list
   fastify.patch('/:id', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('BILLING_ADMIN')],
   }, async (request, reply) => {
     try {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
@@ -245,7 +245,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST /:id/items - Add item to price list
   fastify.post('/:id/items', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('BILLING_ADMIN')],
   }, async (request, reply) => {
     try {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);

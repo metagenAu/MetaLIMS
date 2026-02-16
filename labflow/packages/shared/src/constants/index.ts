@@ -25,6 +25,16 @@ export {
 } from './testStatuses';
 
 export {
+  ORDER_STATUS_INFO,
+  ORDER_STATUS_TRANSITIONS,
+  isValidOrderTransition,
+  getAvailableOrderTransitions,
+  getActiveOrderStatuses,
+  getFinalOrderStatuses,
+  type OrderStatusInfo,
+} from './orderStatuses';
+
+export {
   INVOICE_STATUS_INFO,
   INVOICE_STATUS_TRANSITIONS,
   PAYMENT_TERMS_INFO,

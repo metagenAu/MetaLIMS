@@ -1,14 +1,21 @@
 import { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { prisma } from '@labflow/db';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
-const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'change-me-refresh-in-production';
-const ACCESS_TOKEN_EXPIRY = '15m';
+const ACCESS_TOKEN_EXPIRY = process.env.JWT_EXPIRES_IN || '15m';
 const REFRESH_TOKEN_EXPIRY = '7d';
+
+// Account lockout configuration
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+
+// In-memory failed attempt tracking (use Redis in production for distributed deploys)
+const failedAttempts = new Map<string, { count: number; lastAttempt: Date; lockedUntil?: Date }>();
+
+// Password complexity: min 8 chars, at least 1 uppercase, 1 lowercase, 1 digit, 1 special
+const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^a-zA-Z\d]).{8,128}$/;
 
 const LoginSchema = z.object({
   email: z.string().email(),
@@ -25,25 +32,42 @@ const ForgotPasswordSchema = z.object({
 
 const ResetPasswordSchema = z.object({
   token: z.string().min(1),
-  password: z.string().min(8).max(128),
+  password: z.string().min(8).max(128).refine(
+    (val) => PASSWORD_REGEX.test(val),
+    { message: 'Password must contain at least one uppercase letter, one lowercase letter, one digit, and one special character' },
+  ),
 });
 
-function generateAccessToken(payload: {
-  userId: string;
-  organizationId: string;
-  role: string;
-  email: string;
-}): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRY });
+function checkAccountLockout(email: string): { locked: boolean; retryAfterSeconds?: number } {
+  const record = failedAttempts.get(email);
+  if (!record) return { locked: false };
+
+  if (record.lockedUntil && record.lockedUntil > new Date()) {
+    const retryAfterSeconds = Math.ceil((record.lockedUntil.getTime() - Date.now()) / 1000);
+    return { locked: true, retryAfterSeconds };
+  }
+
+  // Lockout expired, reset
+  if (record.lockedUntil && record.lockedUntil <= new Date()) {
+    failedAttempts.delete(email);
+  }
+  return { locked: false };
 }
 
-function generateRefreshToken(payload: {
-  userId: string;
-  organizationId: string;
-  role: string;
-  email: string;
-}): string {
-  return jwt.sign(payload, JWT_REFRESH_SECRET, { expiresIn: REFRESH_TOKEN_EXPIRY });
+function recordFailedAttempt(email: string): void {
+  const record = failedAttempts.get(email) || { count: 0, lastAttempt: new Date() };
+  record.count += 1;
+  record.lastAttempt = new Date();
+
+  if (record.count >= MAX_FAILED_ATTEMPTS) {
+    record.lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS);
+  }
+
+  failedAttempts.set(email, record);
+}
+
+function clearFailedAttempts(email: string): void {
+  failedAttempts.delete(email);
 }
 
 const routes: FastifyPluginAsync = async (fastify) => {
@@ -51,13 +75,30 @@ const routes: FastifyPluginAsync = async (fastify) => {
   fastify.post('/login', async (request, reply) => {
     try {
       const body = LoginSchema.parse(request.body);
+      const email = body.email.toLowerCase();
 
-      const user = await prisma.user.findUnique({
-        where: { email: body.email.toLowerCase() },
+      // Check account lockout
+      const lockout = checkAccountLockout(email);
+      if (lockout.locked) {
+        return reply.status(429).send({
+          error: {
+            code: 'ACCOUNT_LOCKED',
+            message: `Account temporarily locked due to too many failed attempts. Try again in ${lockout.retryAfterSeconds} seconds.`,
+            details: null,
+          },
+        });
+      }
+
+      const user = await prisma.user.findFirst({
+        where: {
+          email,
+          deletedAt: null,
+        },
         include: { organization: true },
       });
 
       if (!user || !user.isActive) {
+        recordFailedAttempt(email);
         return reply.status(401).send({
           error: {
             code: 'INVALID_CREDENTIALS',
@@ -69,6 +110,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
       const passwordValid = await bcrypt.compare(body.password, user.passwordHash);
       if (!passwordValid) {
+        recordFailedAttempt(email);
         return reply.status(401).send({
           error: {
             code: 'INVALID_CREDENTIALS',
@@ -78,15 +120,29 @@ const routes: FastifyPluginAsync = async (fastify) => {
         });
       }
 
-      const tokenPayload = {
-        userId: user.id,
-        organizationId: user.organizationId,
-        role: user.role,
-        email: user.email,
-      };
+      // Successful login — clear failed attempts
+      clearFailedAttempts(email);
 
-      const accessToken = generateAccessToken(tokenPayload);
-      const refreshToken = generateRefreshToken(tokenPayload);
+      // Sign access token using @fastify/jwt with standardized claims
+      const accessToken = fastify.jwt.sign(
+        {
+          sub: user.id,
+          orgId: user.organizationId,
+          email: user.email,
+          role: user.role,
+        },
+        { expiresIn: ACCESS_TOKEN_EXPIRY },
+      );
+
+      // Sign refresh token using @fastify/jwt
+      const refreshToken = fastify.jwt.sign(
+        {
+          sub: user.id,
+          orgId: user.organizationId,
+          type: 'refresh',
+        },
+        { expiresIn: REFRESH_TOKEN_EXPIRY },
+      );
 
       const refreshTokenHash = crypto
         .createHash('sha256')
@@ -113,7 +169,8 @@ const routes: FastifyPluginAsync = async (fastify) => {
           action: 'LOGIN',
           entityType: 'User',
           entityId: user.id,
-          details: { ip: request.ip },
+          changes: { event: 'login' },
+          metadata: { ip: request.ip },
         },
       });
 
@@ -149,9 +206,10 @@ const routes: FastifyPluginAsync = async (fastify) => {
     try {
       const body = RefreshSchema.parse(request.body);
 
-      let decoded: jwt.JwtPayload;
+      // Verify the refresh token using @fastify/jwt
+      let decoded: { sub: string; orgId: string; type?: string };
       try {
-        decoded = jwt.verify(body.refreshToken, JWT_REFRESH_SECRET) as jwt.JwtPayload;
+        decoded = fastify.jwt.verify<{ sub: string; orgId: string; type?: string }>(body.refreshToken);
       } catch {
         return reply.status(401).send({
           error: {
@@ -172,6 +230,13 @@ const routes: FastifyPluginAsync = async (fastify) => {
       });
 
       if (!storedToken || storedToken.revokedAt || storedToken.expiresAt < new Date()) {
+        // Possible token reuse attack — revoke all tokens for this user
+        if (storedToken?.revokedAt) {
+          await prisma.refreshToken.updateMany({
+            where: { userId: decoded.sub, revokedAt: null },
+            data: { revokedAt: new Date() },
+          });
+        }
         return reply.status(401).send({
           error: {
             code: 'INVALID_REFRESH_TOKEN',
@@ -188,10 +253,10 @@ const routes: FastifyPluginAsync = async (fastify) => {
       });
 
       const user = await prisma.user.findUnique({
-        where: { id: decoded.userId },
+        where: { id: decoded.sub },
       });
 
-      if (!user || !user.isActive) {
+      if (!user || !user.isActive || user.deletedAt) {
         return reply.status(401).send({
           error: {
             code: 'USER_INACTIVE',
@@ -201,15 +266,24 @@ const routes: FastifyPluginAsync = async (fastify) => {
         });
       }
 
-      const tokenPayload = {
-        userId: user.id,
-        organizationId: user.organizationId,
-        role: user.role,
-        email: user.email,
-      };
+      const newAccessToken = fastify.jwt.sign(
+        {
+          sub: user.id,
+          orgId: user.organizationId,
+          email: user.email,
+          role: user.role,
+        },
+        { expiresIn: ACCESS_TOKEN_EXPIRY },
+      );
 
-      const newAccessToken = generateAccessToken(tokenPayload);
-      const newRefreshToken = generateRefreshToken(tokenPayload);
+      const newRefreshToken = fastify.jwt.sign(
+        {
+          sub: user.id,
+          orgId: user.organizationId,
+          type: 'refresh',
+        },
+        { expiresIn: REFRESH_TOKEN_EXPIRY },
+      );
 
       const newRefreshTokenHash = crypto
         .createHash('sha256')
@@ -271,7 +345,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
         action: 'LOGOUT',
         entityType: 'User',
         entityId: request.user.id,
-        details: {},
+        changes: { event: 'logout' },
       },
     });
 
@@ -283,8 +357,11 @@ const routes: FastifyPluginAsync = async (fastify) => {
     try {
       const body = ForgotPasswordSchema.parse(request.body);
 
-      const user = await prisma.user.findUnique({
-        where: { email: body.email.toLowerCase() },
+      const user = await prisma.user.findFirst({
+        where: {
+          email: body.email.toLowerCase(),
+          deletedAt: null,
+        },
       });
 
       // Always return success to prevent email enumeration
@@ -310,7 +387,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
       // In production, send email with reset link containing resetToken
       fastify.log.info(
-        { userId: user.id, resetToken },
+        { userId: user.id },
         'Password reset token generated (send via email in production)'
       );
 
@@ -321,7 +398,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
           action: 'PASSWORD_RESET_REQUESTED',
           entityType: 'User',
           entityId: user.id,
-          details: {},
+          changes: { event: 'password_reset_requested' },
         },
       });
 
@@ -400,7 +477,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
             action: 'PASSWORD_RESET_COMPLETED',
             entityType: 'User',
             entityId: user.id,
-            details: {},
+            changes: { event: 'password_reset_completed' },
           },
         });
       }

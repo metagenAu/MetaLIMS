@@ -5,6 +5,12 @@ import type {
   TestStatus,
   UserRole,
 } from '@labflow/db';
+import {
+  SAMPLE_STATUS_TRANSITIONS,
+  TEST_STATUS_TRANSITIONS,
+  ORDER_STATUS_TRANSITIONS,
+  INVOICE_STATUS_TRANSITIONS,
+} from '@labflow/shared';
 import { ConflictError, ValidationError } from '../utils/errors';
 
 // ============================================================
@@ -29,208 +35,76 @@ interface TransitionRule {
 }
 
 /**
- * Sample status transitions.
- *
- * Happy path: REGISTERED -> RECEIVED -> IN_STORAGE -> IN_PROGRESS ->
- *             TESTING_COMPLETE -> APPROVED -> REPORTED
- *
- * Any status may transition to ON_HOLD or CANCELLED.
+ * Role restrictions for specific transitions. These are layered on top of
+ * the shared transition maps (which are the single source of truth for
+ * which transitions are structurally allowed).
  */
-const SAMPLE_TRANSITIONS: TransitionRule[] = [
-  // Happy-path forward transitions
-  { from: 'REGISTERED', to: 'RECEIVED' },
-  { from: 'RECEIVED', to: 'IN_STORAGE' },
-  { from: 'RECEIVED', to: 'IN_PROGRESS' },
-  { from: 'IN_STORAGE', to: 'IN_PROGRESS' },
-  { from: 'IN_PROGRESS', to: 'TESTING_COMPLETE' },
-  { from: 'TESTING_COMPLETE', to: 'APPROVED', requiredRoles: ['LAB_DIRECTOR', 'LAB_MANAGER', 'SENIOR_ANALYST'] },
-  { from: 'APPROVED', to: 'REPORTED' },
+interface RoleRestriction {
+  entityType: EntityType;
+  to: string;
+  requiredRoles: UserRole[];
+}
 
-  // Resume from hold
-  { from: 'ON_HOLD', to: 'REGISTERED' },
-  { from: 'ON_HOLD', to: 'RECEIVED' },
-  { from: 'ON_HOLD', to: 'IN_STORAGE' },
-  { from: 'ON_HOLD', to: 'IN_PROGRESS' },
-  { from: 'ON_HOLD', to: 'TESTING_COMPLETE' },
+const ROLE_RESTRICTIONS: RoleRestriction[] = [
+  // Sample: approval requires senior staff
+  { entityType: 'SAMPLE', to: 'APPROVED', requiredRoles: ['LAB_DIRECTOR', 'LAB_MANAGER', 'SENIOR_ANALYST'] },
 
-  // Disposal
-  { from: 'REPORTED', to: 'DISPOSED' },
-  { from: 'IN_STORAGE', to: 'DISPOSED' },
+  // Test: approval and rejection require senior staff
+  { entityType: 'TEST', to: 'APPROVED', requiredRoles: ['LAB_DIRECTOR', 'LAB_MANAGER', 'SENIOR_ANALYST'] },
+  { entityType: 'TEST', to: 'REVIEW_REJECTED', requiredRoles: ['LAB_DIRECTOR', 'LAB_MANAGER', 'SENIOR_ANALYST'] },
 
-  // Rejection
-  { from: 'REGISTERED', to: 'REJECTED' },
-  { from: 'RECEIVED', to: 'REJECTED' },
+  // Order: approval requires management
+  { entityType: 'ORDER', to: 'APPROVED', requiredRoles: ['LAB_DIRECTOR', 'LAB_MANAGER'] },
+
+  // Invoice: approval requires management or billing admin
+  { entityType: 'INVOICE', to: 'APPROVED', requiredRoles: ['LAB_DIRECTOR', 'LAB_MANAGER', 'BILLING_ADMIN'] },
 ];
 
-/**
- * Any-source transitions for Samples (ON_HOLD / CANCELLED).
- * These are generated dynamically in the lookup helpers.
- */
-const SAMPLE_WILDCARD_TARGETS: string[] = ['ON_HOLD', 'CANCELLED'];
+// ============================================================
+// Build TransitionRule[] from the shared transition maps
+// ============================================================
 
 /**
- * All concrete sample statuses that may serve as the "current" status.
+ * Convert a Record<Status, Status[]> transition map into TransitionRule[],
+ * layering any role restrictions that apply.
  */
-const ALL_SAMPLE_STATUSES: string[] = [
-  'REGISTERED',
-  'RECEIVED',
-  'IN_STORAGE',
-  'IN_PROGRESS',
-  'TESTING_COMPLETE',
-  'APPROVED',
-  'REPORTED',
-  'ON_HOLD',
-  'DISPOSED',
-  'REJECTED',
-  'CANCELLED',
-];
+function buildRules(
+  entityType: EntityType,
+  transitionMap: Record<string, string[]>,
+): TransitionRule[] {
+  const rules: TransitionRule[] = [];
+  for (const [from, targets] of Object.entries(transitionMap)) {
+    for (const to of targets) {
+      const restriction = ROLE_RESTRICTIONS.find(
+        (r) => r.entityType === entityType && r.to === to,
+      );
+      rules.push({
+        from,
+        to,
+        ...(restriction ? { requiredRoles: restriction.requiredRoles } : {}),
+      });
+    }
+  }
+  return rules;
+}
 
-/**
- * Test status transitions.
- *
- * Happy path: PENDING -> ASSIGNED -> IN_PROGRESS -> COMPLETED ->
- *             IN_REVIEW -> APPROVED
- *
- * Rejection loop: IN_REVIEW -> REVIEW_REJECTED -> IN_PROGRESS
- */
-const TEST_TRANSITIONS: TransitionRule[] = [
-  { from: 'PENDING', to: 'ASSIGNED' },
-  { from: 'ASSIGNED', to: 'IN_PROGRESS' },
-  { from: 'IN_PROGRESS', to: 'COMPLETED' },
-  { from: 'COMPLETED', to: 'IN_REVIEW' },
-  { from: 'IN_REVIEW', to: 'APPROVED', requiredRoles: ['LAB_DIRECTOR', 'LAB_MANAGER', 'SENIOR_ANALYST'] },
-  { from: 'IN_REVIEW', to: 'REVIEW_REJECTED', requiredRoles: ['LAB_DIRECTOR', 'LAB_MANAGER', 'SENIOR_ANALYST'] },
-  { from: 'REVIEW_REJECTED', to: 'IN_PROGRESS' },
-
-  // Hold / cancel from any active state
-  { from: 'PENDING', to: 'ON_HOLD' },
-  { from: 'ASSIGNED', to: 'ON_HOLD' },
-  { from: 'IN_PROGRESS', to: 'ON_HOLD' },
-  { from: 'COMPLETED', to: 'ON_HOLD' },
-  { from: 'IN_REVIEW', to: 'ON_HOLD' },
-  { from: 'REVIEW_REJECTED', to: 'ON_HOLD' },
-
-  { from: 'PENDING', to: 'CANCELLED' },
-  { from: 'ASSIGNED', to: 'CANCELLED' },
-  { from: 'IN_PROGRESS', to: 'CANCELLED' },
-  { from: 'ON_HOLD', to: 'CANCELLED' },
-
-  // Resume from hold
-  { from: 'ON_HOLD', to: 'PENDING' },
-  { from: 'ON_HOLD', to: 'ASSIGNED' },
-  { from: 'ON_HOLD', to: 'IN_PROGRESS' },
-];
-
-/**
- * Order status transitions.
- *
- * Happy path: DRAFT -> SUBMITTED -> RECEIVED -> IN_PROGRESS ->
- *             TESTING_COMPLETE -> IN_REVIEW -> APPROVED -> REPORTED -> COMPLETED
- */
-const ORDER_TRANSITIONS: TransitionRule[] = [
-  { from: 'DRAFT', to: 'SUBMITTED' },
-  { from: 'SUBMITTED', to: 'RECEIVED' },
-  { from: 'RECEIVED', to: 'IN_PROGRESS' },
-  { from: 'IN_PROGRESS', to: 'TESTING_COMPLETE' },
-  { from: 'TESTING_COMPLETE', to: 'IN_REVIEW' },
-  { from: 'IN_REVIEW', to: 'APPROVED', requiredRoles: ['LAB_DIRECTOR', 'LAB_MANAGER'] },
-  { from: 'APPROVED', to: 'REPORTED' },
-  { from: 'REPORTED', to: 'COMPLETED' },
-
-  // Hold / cancel wildcards
-  { from: 'DRAFT', to: 'CANCELLED' },
-  { from: 'SUBMITTED', to: 'CANCELLED' },
-  { from: 'RECEIVED', to: 'CANCELLED' },
-  { from: 'SUBMITTED', to: 'ON_HOLD' },
-  { from: 'RECEIVED', to: 'ON_HOLD' },
-  { from: 'IN_PROGRESS', to: 'ON_HOLD' },
-  { from: 'TESTING_COMPLETE', to: 'ON_HOLD' },
-  { from: 'IN_REVIEW', to: 'ON_HOLD' },
-
-  // Resume from hold
-  { from: 'ON_HOLD', to: 'SUBMITTED' },
-  { from: 'ON_HOLD', to: 'RECEIVED' },
-  { from: 'ON_HOLD', to: 'IN_PROGRESS' },
-  { from: 'ON_HOLD', to: 'TESTING_COMPLETE' },
-];
-
-/**
- * Invoice status transitions.
- */
-const INVOICE_TRANSITIONS: TransitionRule[] = [
-  { from: 'DRAFT', to: 'PENDING_APPROVAL' },
-  { from: 'PENDING_APPROVAL', to: 'APPROVED', requiredRoles: ['LAB_DIRECTOR', 'LAB_MANAGER', 'BILLING_ADMIN'] },
-  { from: 'APPROVED', to: 'SENT' },
-  { from: 'SENT', to: 'VIEWED' },
-  { from: 'SENT', to: 'PARTIALLY_PAID' },
-  { from: 'SENT', to: 'PAID' },
-  { from: 'SENT', to: 'OVERDUE' },
-  { from: 'VIEWED', to: 'PARTIALLY_PAID' },
-  { from: 'VIEWED', to: 'PAID' },
-  { from: 'VIEWED', to: 'OVERDUE' },
-  { from: 'PARTIALLY_PAID', to: 'PAID' },
-  { from: 'PARTIALLY_PAID', to: 'OVERDUE' },
-  { from: 'OVERDUE', to: 'PARTIALLY_PAID' },
-  { from: 'OVERDUE', to: 'PAID' },
-
-  // Void from most statuses
-  { from: 'DRAFT', to: 'VOID' },
-  { from: 'PENDING_APPROVAL', to: 'VOID' },
-  { from: 'APPROVED', to: 'VOID' },
-  { from: 'SENT', to: 'VOID' },
-  { from: 'VIEWED', to: 'VOID' },
-  { from: 'OVERDUE', to: 'VOID' },
-
-  // Write-off
-  { from: 'OVERDUE', to: 'WRITTEN_OFF' },
-];
+const TRANSITION_RULES: Record<EntityType, TransitionRule[]> = {
+  SAMPLE: buildRules('SAMPLE', SAMPLE_STATUS_TRANSITIONS as unknown as Record<string, string[]>),
+  TEST: buildRules('TEST', TEST_STATUS_TRANSITIONS as unknown as Record<string, string[]>),
+  ORDER: buildRules('ORDER', ORDER_STATUS_TRANSITIONS as unknown as Record<string, string[]>),
+  INVOICE: buildRules('INVOICE', INVOICE_STATUS_TRANSITIONS as unknown as Record<string, string[]>),
+};
 
 // ============================================================
 // Registry lookup
 // ============================================================
 
 function getTransitions(entityType: EntityType): TransitionRule[] {
-  switch (entityType) {
-    case 'SAMPLE':
-      return SAMPLE_TRANSITIONS;
-    case 'TEST':
-      return TEST_TRANSITIONS;
-    case 'ORDER':
-      return ORDER_TRANSITIONS;
-    case 'INVOICE':
-      return INVOICE_TRANSITIONS;
-    default:
-      throw new ValidationError(`Unknown entity type: ${entityType}`);
+  const rules = TRANSITION_RULES[entityType];
+  if (!rules) {
+    throw new ValidationError(`Unknown entity type: ${entityType}`);
   }
-}
-
-/**
- * Build the complete transition list for samples, including wildcard
- * any-to-target rules that apply from every non-terminal status.
- */
-function getEffectiveSampleTransitions(): TransitionRule[] {
-  const explicit = [...SAMPLE_TRANSITIONS];
-  const terminalStatuses = new Set(['DISPOSED', 'CANCELLED']);
-  for (const status of ALL_SAMPLE_STATUSES) {
-    if (terminalStatuses.has(status)) continue;
-    for (const target of SAMPLE_WILDCARD_TARGETS) {
-      // Skip if the source is already the target
-      if (status === target) continue;
-      // Only add if not already explicitly defined
-      const exists = explicit.some((t) => t.from === status && t.to === target);
-      if (!exists) {
-        explicit.push({ from: status, to: target });
-      }
-    }
-  }
-  return explicit;
-}
-
-function getEffectiveTransitions(entityType: EntityType): TransitionRule[] {
-  if (entityType === 'SAMPLE') {
-    return getEffectiveSampleTransitions();
-  }
-  return getTransitions(entityType);
+  return rules;
 }
 
 // ============================================================
@@ -257,7 +131,7 @@ export function validateTransition(
     );
   }
 
-  const transitions = getEffectiveTransitions(entityType);
+  const transitions = getTransitions(entityType);
   const allowed = transitions.some(
     (t) => t.from === currentStatus && t.to === targetStatus,
   );
@@ -419,7 +293,7 @@ export function getAvailableTransitions(
   currentStatus: string,
   userRole?: UserRole | string,
 ): string[] {
-  const transitions = getEffectiveTransitions(entityType);
+  const transitions = getTransitions(entityType);
 
   return transitions
     .filter((t) => {

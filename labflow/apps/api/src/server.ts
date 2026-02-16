@@ -27,8 +27,8 @@ import auditLogPlugin from './middleware/auditLog.js';
 export async function buildServer(): Promise<FastifyInstance> {
   const fastify = Fastify({
     ...fastifyLoggerOptions,
-    // Trust the first proxy (e.g., nginx, ALB)
-    trustProxy: process.env.TRUST_PROXY === 'true' || true,
+    // Trust the first proxy (e.g., nginx, ALB) only when explicitly configured
+    trustProxy: process.env.TRUST_PROXY === 'true',
     // Increase default body limit to 10MB for file uploads
     bodyLimit: 10 * 1024 * 1024,
     // Case-insensitive routing
@@ -46,8 +46,12 @@ export async function buildServer(): Promise<FastifyInstance> {
   await fastify.register(corsPlugin);
 
   // Cookie support (used for refresh tokens)
+  const cookieSecret = process.env.COOKIE_SECRET;
+  if (!cookieSecret && process.env.NODE_ENV === 'production') {
+    throw new Error('COOKIE_SECRET environment variable is required in production');
+  }
   await fastify.register(cookie, {
-    secret: process.env.COOKIE_SECRET || process.env.JWT_SECRET || 'labflow-dev-cookie-secret',
+    secret: cookieSecret || process.env.JWT_SECRET || 'labflow-dev-cookie-secret',
     parseOptions: {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -90,9 +94,17 @@ export async function buildServer(): Promise<FastifyInstance> {
   fastify.decorateRequest('user', undefined);
   fastify.decorateRequest('organizationId', '');
 
-  // Add X-Request-Id to every response
+  // Add X-Request-Id and security headers to every response
   fastify.addHook('onSend', async (request, reply) => {
     reply.header('x-request-id', request.id);
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('x-frame-options', 'DENY');
+    reply.header('x-xss-protection', '0');
+    reply.header('referrer-policy', 'strict-origin-when-cross-origin');
+    reply.header('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+    if (process.env.NODE_ENV === 'production') {
+      reply.header('strict-transport-security', 'max-age=31536000; includeSubDomains');
+    }
   });
 
   // ---------------------------------------------------------------
@@ -140,17 +152,25 @@ export async function buildServer(): Promise<FastifyInstance> {
   // Each route module is responsible for its own auth preHandlers.
   await fastify.register(
     async function v1Routes(v1: FastifyInstance) {
-      // Placeholder: individual route files will be registered here.
-      // Example:
-      //   await v1.register(import('./routes/auth.js'), { prefix: '/auth' });
-      //   await v1.register(import('./routes/samples.js'), { prefix: '/samples' });
-      //   await v1.register(import('./routes/orders.js'), { prefix: '/orders' });
-      //   await v1.register(import('./routes/clients.js'), { prefix: '/clients' });
-      //   await v1.register(import('./routes/tests.js'), { prefix: '/tests' });
-      //   await v1.register(import('./routes/invoices.js'), { prefix: '/invoices' });
-      //   await v1.register(import('./routes/reports.js'), { prefix: '/reports' });
-      //   await v1.register(import('./routes/instruments.js'), { prefix: '/instruments' });
-      //   await v1.register(import('./routes/users.js'), { prefix: '/users' });
+      await v1.register(import('./routes/auth/index.js'), { prefix: '/auth' });
+      await v1.register(import('./routes/samples/index.js'), { prefix: '/samples' });
+      await v1.register(import('./routes/tests/index.js'), { prefix: '/tests' });
+      await v1.register(import('./routes/orders/index.js'), { prefix: '/orders' });
+      await v1.register(import('./routes/clients/index.js'), { prefix: '/clients' });
+      await v1.register(import('./routes/invoices/index.js'), { prefix: '/invoices' });
+      await v1.register(import('./routes/payments/index.js'), { prefix: '/payments' });
+      await v1.register(import('./routes/reports/index.js'), { prefix: '/reports' });
+      await v1.register(import('./routes/users/index.js'), { prefix: '/users' });
+      await v1.register(import('./routes/instruments/index.js'), { prefix: '/instruments' });
+      await v1.register(import('./routes/specifications/index.js'), { prefix: '/specifications' });
+      await v1.register(import('./routes/testMethods/index.js'), { prefix: '/test-methods' });
+      await v1.register(import('./routes/storage/index.js'), { prefix: '/storage' });
+      await v1.register(import('./routes/priceLists/index.js'), { prefix: '/price-lists' });
+      await v1.register(import('./routes/projects/index.js'), { prefix: '/projects' });
+      await v1.register(import('./routes/dashboard/index.js'), { prefix: '/dashboard' });
+      await v1.register(import('./routes/notifications/index.js'), { prefix: '/notifications' });
+      await v1.register(import('./routes/audit/index.js'), { prefix: '/audit' });
+      await v1.register(import('./routes/webhooks/index.js'), { prefix: '/webhooks' });
 
       // Default 404 for the v1 scope
       v1.setNotFoundHandler(async (request, _reply) => {
@@ -214,15 +234,25 @@ export async function buildServer(): Promise<FastifyInstance> {
 
     // Handle Prisma known errors
     if (error.name === 'PrismaClientKnownRequestError') {
-      const prismaError = error as Error & { code: string; meta?: { target?: string[] } };
+      const prismaError = error as Error & { code: string; meta?: { target?: string[]; field_name?: string; cause?: string } };
       if (prismaError.code === 'P2002') {
         request.log.warn({ err: error }, 'Unique constraint violation');
         return reply.status(409).send({
           statusCode: 409,
           error: 'ConflictError',
           code: 'CONFLICT',
-          message: `A record with this value already exists`,
+          message: 'A record with this value already exists',
           details: { fields: prismaError.meta?.target },
+        });
+      }
+      if (prismaError.code === 'P2003') {
+        request.log.warn({ err: error }, 'Foreign key constraint violation');
+        return reply.status(400).send({
+          statusCode: 400,
+          error: 'ValidationError',
+          code: 'FOREIGN_KEY_VIOLATION',
+          message: 'Referenced record does not exist',
+          details: { field: prismaError.meta?.field_name },
         });
       }
       if (prismaError.code === 'P2025') {
@@ -243,16 +273,16 @@ export async function buildServer(): Promise<FastifyInstance> {
       'Unhandled error',
     );
 
-    // In production, do not leak internal error details
-    const isProduction = process.env.NODE_ENV === 'production';
+    // Only leak internal error details in development (not staging or production)
+    const isDevelopment = process.env.NODE_ENV === 'development';
     return reply.status(statusCode).send({
       statusCode,
       error: 'InternalError',
       code: 'INTERNAL_ERROR',
-      message: isProduction
-        ? 'An internal server error occurred'
-        : error.message,
-      ...(isProduction ? {} : { stack: error.stack }),
+      message: isDevelopment
+        ? error.message
+        : 'An internal server error occurred',
+      ...(isDevelopment ? { stack: error.stack } : {}),
     });
   });
 

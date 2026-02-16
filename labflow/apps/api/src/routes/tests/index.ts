@@ -592,7 +592,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST /:id/review - Review test results (approve/reject)
   fastify.post('/:id/review', {
-    preHandler: [fastify.authenticate, fastify.requireRole('REVIEWER')],
+    preHandler: [fastify.authenticate, fastify.requireRole('SENIOR_ANALYST')],
   }, async (request, reply) => {
     try {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
@@ -651,7 +651,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST /:id/approve - Final approval of test results
   fastify.post('/:id/approve', {
-    preHandler: [fastify.authenticate, fastify.requireRole('APPROVER')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_DIRECTOR')],
   }, async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = z.object({ comments: z.string().optional().nullable() }).parse(request.body || {});
@@ -715,7 +715,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST /:id/reject - Reject test results (send back for re-testing)
   fastify.post('/:id/reject', {
-    preHandler: [fastify.authenticate, fastify.requireRole('REVIEWER')],
+    preHandler: [fastify.authenticate, fastify.requireRole('SENIOR_ANALYST')],
   }, async (request, reply) => {
     try {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
@@ -857,7 +857,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST /batch-assign - Batch assign tests to an analyst
   fastify.post('/batch-assign', {
-    preHandler: [fastify.authenticate, fastify.requireRole('SUPERVISOR')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_MANAGER')],
   }, async (request, reply) => {
     try {
       const body = BatchAssignSchema.parse(request.body);

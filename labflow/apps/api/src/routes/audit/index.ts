@@ -19,7 +19,7 @@ const AuditFilterSchema = z.object({
 const routes: FastifyPluginAsync = async (fastify) => {
   // GET / - Search audit log with filters
   fastify.get('/', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_DIRECTOR')],
   }, async (request, reply) => {
     try {
       const query = AuditFilterSchema.parse(request.query);

@@ -15,8 +15,15 @@ async function corsPlugin(fastify: FastifyInstance): Promise<void> {
   // Comma-separated list of allowed origins, e.g.:
   //   CORS_ORIGINS=https://app.labflow.io,https://portal.labflow.io
   const configuredOrigins = process.env.CORS_ORIGINS
-    ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim())
+    ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
     : [];
+
+  if (isProduction && configuredOrigins.length === 0) {
+    fastify.log.warn(
+      'CORS_ORIGINS is not set in production — all browser cross-origin requests will be rejected. ' +
+      'Set CORS_ORIGINS to a comma-separated list of allowed origins.',
+    );
+  }
 
   await fastify.register(cors, {
     origin: isProduction

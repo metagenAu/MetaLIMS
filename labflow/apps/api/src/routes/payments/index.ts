@@ -229,7 +229,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST /:id/refund - Refund a payment
   fastify.post('/:id/refund', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('BILLING_ADMIN')],
   }, async (request, reply) => {
     try {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);

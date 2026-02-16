@@ -48,7 +48,7 @@ const UpdateUserSchema = z.object({
 const routes: FastifyPluginAsync = async (fastify) => {
   // GET / - List users
   fastify.get('/', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_DIRECTOR')],
   }, async (request, reply) => {
     try {
       const query = UserFilterSchema.parse(request.query);
@@ -116,7 +116,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST / - Create user
   fastify.post('/', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_DIRECTOR')],
   }, async (request, reply) => {
     try {
       const body = CreateUserSchema.parse(request.body);
@@ -181,7 +181,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // PATCH /:id - Update user
   fastify.patch('/:id', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_DIRECTOR')],
   }, async (request, reply) => {
     try {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
@@ -272,7 +272,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST /:id/deactivate - Deactivate user
   fastify.post('/:id/deactivate', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_DIRECTOR')],
   }, async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = z.object({
