@@ -297,7 +297,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST /:id/approve - Approve report
   fastify.post('/:id/approve', {
-    preHandler: [fastify.authenticate, fastify.requireRole('APPROVER')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_DIRECTOR')],
   }, async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = z.object({ comments: z.string().optional().nullable() }).parse(request.body || {});
@@ -423,7 +423,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST /:id/amend - Amend a sent report
   fastify.post('/:id/amend', {
-    preHandler: [fastify.authenticate, fastify.requireRole('APPROVER')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_DIRECTOR')],
   }, async (request, reply) => {
     try {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);

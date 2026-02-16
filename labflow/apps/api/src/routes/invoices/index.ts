@@ -556,7 +556,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST /:id/approve - Approve invoice
   fastify.post('/:id/approve', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_DIRECTOR')],
   }, async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
 
@@ -665,7 +665,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST /:id/void - Void an invoice
   fastify.post('/:id/void', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_DIRECTOR')],
   }, async (request, reply) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = z.object({
@@ -747,7 +747,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST /:id/credit-note - Issue credit note
   fastify.post('/:id/credit-note', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_DIRECTOR')],
   }, async (request, reply) => {
     try {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);

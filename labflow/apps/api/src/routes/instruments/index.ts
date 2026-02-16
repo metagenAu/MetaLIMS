@@ -118,7 +118,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST / - Create instrument
   fastify.post('/', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_MANAGER')],
   }, async (request, reply) => {
     try {
       const body = CreateInstrumentSchema.parse(request.body);
@@ -165,7 +165,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // PATCH /:id - Update instrument
   fastify.patch('/:id', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_MANAGER')],
   }, async (request, reply) => {
     try {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);

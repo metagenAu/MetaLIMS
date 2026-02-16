@@ -88,16 +88,49 @@ model User {
 
   organization Organization @relation(fields: [organizationId], references: [id])
 
-  samplesCreated  Sample[]         @relation("SampleCreator")
-  testsAssigned   Test[]           @relation("TestAnalyst")
-  testsReviewed   Test[]           @relation("TestReviewer")
-  testsApproved   Test[]           @relation("TestApprover")
-  approvalActions   ApprovalAction[]
-  auditLogs         AuditLog[]
-  operatedPcrPlates PCRPlate[]       @relation("PCRPlateOperator")
+  samplesCreated      Sample[]              @relation("SampleCreator")
+  testsAssigned       Test[]                @relation("TestAnalyst")
+  testsReviewed       Test[]                @relation("TestReviewer")
+  testsApproved       Test[]                @relation("TestApprover")
+  approvalActions     ApprovalAction[]
+  auditLogs           AuditLog[]
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
 
   @@unique([organizationId, email])
   @@map("users")
+}
+
+// ============================================================
+// AUTH TOKENS
+// ============================================================
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  userId    String
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("password_reset_tokens")
 }
 
 enum UserRole {
@@ -267,6 +300,8 @@ model Order {
   invoiceLineItems InvoiceLineItem[]
 
   @@unique([organizationId, orderNumber])
+  @@index([clientId])
+  @@index([organizationId, status])
   @@map("orders")
 }
 
@@ -342,6 +377,8 @@ model Sample {
   chainOfCustody   ChainOfCustodyEntry[]
 
   @@unique([organizationId, sampleNumber])
+  @@index([orderId])
+  @@index([organizationId, status])
   @@map("samples")
 }
 
@@ -469,6 +506,10 @@ model Test {
   results         TestResult[]
   approvalActions ApprovalAction[]
 
+  @@index([sampleId])
+  @@index([testMethodId])
+  @@index([assignedToId])
+  @@index([status])
   @@map("tests")
 }
 
@@ -519,6 +560,7 @@ model TestResult {
   analyte       TestAnalyte    @relation(fields: [analyteId], references: [id])
   specification Specification? @relation(fields: [specificationId], references: [id])
 
+  @@unique([testId, analyteId])
   @@map("test_results")
 }
 
@@ -774,6 +816,8 @@ model Invoice {
   creditNotes CreditNote[]
 
   @@unique([organizationId, invoiceNumber])
+  @@index([clientId])
+  @@index([organizationId, status])
   @@map("invoices")
 }
 
@@ -831,6 +875,8 @@ model Payment {
   invoice Invoice? @relation(fields: [invoiceId], references: [id])
   client  Client   @relation(fields: [clientId], references: [id])
 
+  @@index([invoiceId])
+  @@index([clientId])
   @@map("payments")
 }
 

@@ -429,7 +429,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // GET /analyst-workload - Workload distribution across analysts
   fastify.get('/analyst-workload', {
-    preHandler: [fastify.authenticate, fastify.requireRole('SUPERVISOR')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_MANAGER')],
   }, async (request, reply) => {
     const orgId = request.user.organizationId;
 

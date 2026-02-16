@@ -105,7 +105,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST / - Create specification
   fastify.post('/', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_MANAGER')],
   }, async (request, reply) => {
     try {
       const body = CreateSpecificationSchema.parse(request.body);
@@ -180,7 +180,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // PATCH /:id - Update specification
   fastify.patch('/:id', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_MANAGER')],
   }, async (request, reply) => {
     try {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
@@ -240,7 +240,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST /:id/limits - Add specification limit
   fastify.post('/:id/limits', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_MANAGER')],
   }, async (request, reply) => {
     try {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);

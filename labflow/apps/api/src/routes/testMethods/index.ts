@@ -104,7 +104,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST / - Create test method
   fastify.post('/', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_MANAGER')],
   }, async (request, reply) => {
     try {
       const body = CreateTestMethodSchema.parse(request.body);
@@ -174,7 +174,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // PATCH /:id - Update test method
   fastify.patch('/:id', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_MANAGER')],
   }, async (request, reply) => {
     try {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
@@ -232,7 +232,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // POST /:id/analytes - Add analyte to test method
   fastify.post('/:id/analytes', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_MANAGER')],
   }, async (request, reply) => {
     try {
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
@@ -279,7 +279,7 @@ const routes: FastifyPluginAsync = async (fastify) => {
 
   // PATCH /:id/analytes/:aid - Update analyte
   fastify.patch('/:id/analytes/:aid', {
-    preHandler: [fastify.authenticate, fastify.requireRole('ADMIN')],
+    preHandler: [fastify.authenticate, fastify.requireRole('LAB_MANAGER')],
   }, async (request, reply) => {
     try {
       const params = z.object({
