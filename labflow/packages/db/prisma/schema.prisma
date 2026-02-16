@@ -1027,3 +1027,278 @@ model Notification {
   @@index([userId, isRead])
   @@map("notifications")
 }
+
+// ============================================================
+// METABARCODING / SEQUENCING
+// ============================================================
+
+enum SequencingRunStatus {
+  SETUP
+  DNA_EXTRACTED
+  PCR_IN_PROGRESS
+  POOLED
+  SUBMITTED
+  SEQUENCED
+}
+
+enum ExtractionMethod {
+  AUTOMATED
+  MANUAL
+  OTHER
+}
+
+enum WellType {
+  SAMPLE
+  MOCK_CONTROL
+  EXTRACTION_CONTROL
+  NTC
+  POSITIVE_CONTROL
+  EMPTY
+}
+
+enum PcrAssay {
+  ASSAY_16S
+  ASSAY_EUK2
+  ASSAY_ITS
+  ASSAY_COI
+}
+
+enum PcrPlateStatus {
+  PLATE_SETUP
+  PCR_COMPLETE
+  GEL_CHECKED
+  POOLING_ASSIGNED
+  PLATE_DONE
+}
+
+enum PcrResult {
+  PCR_PENDING
+  PASS
+  FAIL
+  BORDERLINE
+}
+
+enum PoolingAction {
+  POOL_NORMAL
+  POOL_DOUBLE
+  DO_NOT_POOL
+  POOL_SKIP
+}
+
+enum PlateImageType {
+  GEL
+  BIOANALYZER
+  TAPESTATION
+  PLATE_IMAGE_OTHER
+}
+
+model SequencingRun {
+  id             String               @id @default(uuid())
+  organizationId String
+  runIdentifier  String
+  status         SequencingRunStatus   @default(SETUP)
+  dateStarted    DateTime?
+  poolConfig     Json                  @default("[]")
+  notes          String?
+  createdById    String?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  dnaPlates        DNAPlate[]
+  pcrPlates        PCRPlate[]
+  poolDefinitions  PoolDefinition[]
+  reagentInventory RunReagentInventory[]
+
+  @@unique([organizationId, runIdentifier])
+  @@index([organizationId, status])
+  @@map("sequencing_runs")
+}
+
+model DNAPlate {
+  id               String           @id @default(uuid())
+  sequencingRunId  String
+  plateIdentifier  String
+  plateBarcode     String?
+  extractionMethod ExtractionMethod
+  clientProject    String?
+  notes            String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  sequencingRun SequencingRun @relation(fields: [sequencingRunId], references: [id], onDelete: Cascade)
+  wells         DNAPlateWell[]
+  pcrPlates     PCRPlate[]
+  images        PlateImage[]   @relation("DNAPlateImages")
+
+  @@unique([sequencingRunId, plateIdentifier])
+  @@map("dna_plates")
+}
+
+model DNAPlateWell {
+  id                   String   @id @default(uuid())
+  dnaPlateId           String
+  position             String
+  sampleId             String?
+  wellType             WellType @default(SAMPLE)
+  dnaConcentrationNgUl Decimal? @db.Decimal(10, 4)
+  notes                String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  dnaPlate DNAPlate @relation(fields: [dnaPlateId], references: [id], onDelete: Cascade)
+
+  @@unique([dnaPlateId, position])
+  @@map("dna_plate_wells")
+}
+
+model IndexPlateReference {
+  id             String   @id @default(uuid())
+  organizationId String
+  plateName      String
+  description    String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  wells     IndexWell[]
+  pcrPlates PCRPlate[]
+
+  @@unique([organizationId, plateName])
+  @@map("index_plate_references")
+}
+
+model IndexWell {
+  id                    String   @id @default(uuid())
+  indexPlateReferenceId String
+  position              String
+  i5Name                String
+  i5Sequence            String
+  i7Name                String
+  i7Sequence            String
+  mergedSequence        String?
+  createdAt             DateTime @default(now())
+
+  indexPlateReference IndexPlateReference @relation(fields: [indexPlateReferenceId], references: [id], onDelete: Cascade)
+
+  @@unique([indexPlateReferenceId, position])
+  @@map("index_wells")
+}
+
+model PCRPlate {
+  id                    String         @id @default(uuid())
+  sequencingRunId       String
+  plateIdentifier       String
+  plateBarcode          String?
+  pcrAssay              PcrAssay
+  datePerformed         DateTime?
+  sourceDnaPlateId      String?
+  indexPlateReferenceId String?
+  isRedo                Boolean        @default(false)
+  redoOfPlateId         String?
+  operatorId            String?
+  gelNotes              String?
+  status                PcrPlateStatus @default(PLATE_SETUP)
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  sequencingRun       SequencingRun        @relation(fields: [sequencingRunId], references: [id], onDelete: Cascade)
+  sourceDnaPlate      DNAPlate?            @relation(fields: [sourceDnaPlateId], references: [id])
+  indexPlateReference IndexPlateReference?  @relation(fields: [indexPlateReferenceId], references: [id])
+  redoOfPlate         PCRPlate?            @relation("PCRPlateRedo", fields: [redoOfPlateId], references: [id])
+  redoPlates          PCRPlate[]           @relation("PCRPlateRedo")
+  operator            User?                @relation("PCRPlateOperator", fields: [operatorId], references: [id])
+  wells               PCRPlateWell[]
+  images              PlateImage[]         @relation("PCRPlateImages")
+  poolAssignments     PoolPlateAssignment[]
+
+  @@unique([sequencingRunId, plateIdentifier])
+  @@map("pcr_plates")
+}
+
+model PCRPlateWell {
+  id                  String        @id @default(uuid())
+  pcrPlateId          String
+  position            String
+  sampleLabel         String?
+  assayType           String?
+  wellType            WellType      @default(SAMPLE)
+  indexI5Sequence     String?
+  indexI7Sequence     String?
+  mergedIndexSequence String?
+  pcrResult           PcrResult     @default(PCR_PENDING)
+  poolingAction       PoolingAction @default(POOL_NORMAL)
+  notes               String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  pcrPlate PCRPlate @relation(fields: [pcrPlateId], references: [id], onDelete: Cascade)
+
+  @@unique([pcrPlateId, position])
+  @@map("pcr_plate_wells")
+}
+
+model PlateImage {
+  id           String         @id @default(uuid())
+  dnaPlateId   String?
+  pcrPlateId   String?
+  imageType    PlateImageType
+  fileKey      String
+  fileName     String
+  mimeType     String         @default("image/jpeg")
+  caption      String?
+  uploadedById String?
+  createdAt    DateTime       @default(now())
+
+  dnaPlate DNAPlate? @relation("DNAPlateImages", fields: [dnaPlateId], references: [id], onDelete: Cascade)
+  pcrPlate PCRPlate? @relation("PCRPlateImages", fields: [pcrPlateId], references: [id], onDelete: Cascade)
+
+  @@map("plate_images")
+}
+
+model PoolDefinition {
+  id              String   @id @default(uuid())
+  sequencingRunId String
+  poolName        String
+  assayRatios     Json     @default("{}")
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  sequencingRun    SequencingRun         @relation(fields: [sequencingRunId], references: [id], onDelete: Cascade)
+  plateAssignments PoolPlateAssignment[]
+
+  @@unique([sequencingRunId, poolName])
+  @@map("pool_definitions")
+}
+
+model PoolPlateAssignment {
+  id               String   @id @default(uuid())
+  poolDefinitionId String
+  pcrPlateId       String
+  createdAt        DateTime @default(now())
+
+  poolDefinition PoolDefinition @relation(fields: [poolDefinitionId], references: [id], onDelete: Cascade)
+  pcrPlate       PCRPlate       @relation(fields: [pcrPlateId], references: [id], onDelete: Cascade)
+
+  @@unique([poolDefinitionId, pcrPlateId])
+  @@map("pool_plate_assignments")
+}
+
+model RunReagentInventory {
+  id              String    @id @default(uuid())
+  sequencingRunId String
+  reagentName     String
+  amountOnHand    Decimal   @default(0) @db.Decimal(10, 4)
+  minimumRequired Decimal   @default(0) @db.Decimal(10, 4)
+  amountToMake    Decimal   @default(0) @db.Decimal(10, 4)
+  unit            String    @default("mL")
+  lotNumber       String?
+  expiryDate      DateTime?
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  sequencingRun SequencingRun @relation(fields: [sequencingRunId], references: [id], onDelete: Cascade)
+
+  @@map("run_reagent_inventory")
+}

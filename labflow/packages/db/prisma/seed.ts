@@ -43,6 +43,19 @@ async function main() {
 
   // Clean existing data in reverse-dependency order
   await prisma.$transaction([
+    // Metabarcoding / Sequencing
+    prisma.poolPlateAssignment.deleteMany(),
+    prisma.poolDefinition.deleteMany(),
+    prisma.runReagentInventory.deleteMany(),
+    prisma.plateImage.deleteMany(),
+    prisma.pCRPlateWell.deleteMany(),
+    prisma.pCRPlate.deleteMany(),
+    prisma.dNAPlateWell.deleteMany(),
+    prisma.dNAPlate.deleteMany(),
+    prisma.sequencingRun.deleteMany(),
+    prisma.indexWell.deleteMany(),
+    prisma.indexPlateReference.deleteMany(),
+    // Core
     prisma.notification.deleteMany(),
     prisma.auditLog.deleteMany(),
     prisma.approvalAction.deleteMany(),
@@ -1449,6 +1462,300 @@ async function main() {
   console.log('  Created sequence records');
 
   // =========================================================================
+  // Metabarcoding / Sequencing Module Seed Data
+  // =========================================================================
+
+  console.log('\n  Seeding metabarcoding module...');
+
+  // Helper: generate synthetic but structurally valid DNA sequences
+  const BASES = ['A', 'T', 'G', 'C'];
+  function randomSequence(len: number): string {
+    return Array.from({ length: len }, () => BASES[Math.floor(Math.random() * 4)]).join('');
+  }
+
+  const WELL_ROWS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+  const WELL_COLS = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'];
+  const ALL_POSITIONS = WELL_ROWS.flatMap((r) => WELL_COLS.map((c) => `${r}${c}`));
+
+  // ---- Index Plate References ----
+
+  const indexPlate1 = await prisma.indexPlateReference.create({
+    data: {
+      id: randomUUID(),
+      organizationId: org.id,
+      plateName: 'ND5_NB7',
+      description: 'Nextera UD Index Set D5 / NB7 — 96 unique dual indices',
+      isActive: true,
+    },
+  });
+
+  const indexPlate2 = await prisma.indexPlateReference.create({
+    data: {
+      id: randomUUID(),
+      organizationId: org.id,
+      plateName: 'NB5_NB7',
+      description: 'Nextera UD Index Set B5 / NB7 — 96 unique dual indices',
+      isActive: true,
+    },
+  });
+
+  // Populate index wells for both plates
+  for (const plate of [indexPlate1, indexPlate2]) {
+    await prisma.indexWell.createMany({
+      data: ALL_POSITIONS.map((pos, idx) => {
+        const i5Seq = randomSequence(8);
+        const i7Seq = randomSequence(8);
+        return {
+          id: randomUUID(),
+          indexPlateReferenceId: plate.id,
+          position: pos,
+          i5Name: `${plate.plateName}_i5_${String(idx + 1).padStart(3, '0')}`,
+          i5Sequence: i5Seq,
+          i7Name: `${plate.plateName}_i7_${String(idx + 1).padStart(3, '0')}`,
+          i7Sequence: i7Seq,
+          mergedSequence: `${i5Seq}${i7Seq}`,
+        };
+      }),
+    });
+  }
+
+  console.log('  Created 2 index plate references with 96 wells each');
+
+  // ---- Sequencing Run m95 ----
+
+  const run = await prisma.sequencingRun.create({
+    data: {
+      id: randomUUID(),
+      organizationId: org.id,
+      runIdentifier: 'm95',
+      status: 'PCR_IN_PROGRESS',
+      dateStarted: daysAgo(14),
+      poolConfig: [
+        { poolName: 'Pool 1', assays: ['16S', 'EUK2'], ratio: '1:1' },
+      ],
+      notes: 'Demo metabarcoding run — environmental soil samples',
+      createdById: users['LAB_MANAGER'],
+    },
+  });
+
+  console.log(`  Created sequencing run: ${run.runIdentifier}`);
+
+  // ---- DNA Plates ----
+
+  const dnaPlate1 = await prisma.dNAPlate.create({
+    data: {
+      id: randomUUID(),
+      sequencingRunId: run.id,
+      plateIdentifier: 'm95a',
+      plateBarcode: 'DNAP-M95A-001',
+      extractionMethod: 'AUTOMATED',
+      clientProject: 'River Water Survey 2024',
+      notes: 'Extracted with KingFisher Flex',
+    },
+  });
+
+  const dnaPlate2 = await prisma.dNAPlate.create({
+    data: {
+      id: randomUUID(),
+      sequencingRunId: run.id,
+      plateIdentifier: 'm95b',
+      plateBarcode: 'DNAP-M95B-002',
+      extractionMethod: 'AUTOMATED',
+      clientProject: 'Soil Monitoring Phase 3',
+      notes: 'Extracted with KingFisher Flex',
+    },
+  });
+
+  // Populate DNA plate wells — mix of sample types
+  const SAMPLE_PREFIXES = ['RW', 'SM']; // River Water, Soil Monitoring
+  for (const [plateIdx, dnaPlate] of [dnaPlate1, dnaPlate2].entries()) {
+    const prefix = SAMPLE_PREFIXES[plateIdx];
+    const wellData = ALL_POSITIONS.map((pos, idx) => {
+      let wellType: 'SAMPLE' | 'MOCK_CONTROL' | 'NTC' | 'EXTRACTION_CONTROL' | 'EMPTY' = 'SAMPLE';
+      let sampleId: string | null = `${prefix}-${String(idx + 1).padStart(3, '0')}`;
+
+      // Make H12 the NTC
+      if (pos === 'H12') {
+        wellType = 'NTC';
+        sampleId = null;
+      }
+      // Make H11 the mock community control
+      else if (pos === 'H11') {
+        wellType = 'MOCK_CONTROL';
+        sampleId = 'ZymoBIOMICS-STD';
+      }
+      // Make H10 extraction control
+      else if (pos === 'H10') {
+        wellType = 'EXTRACTION_CONTROL';
+        sampleId = `EC-${prefix}`;
+      }
+      // Leave last few wells empty
+      else if (idx >= 93) {
+        wellType = 'EMPTY';
+        sampleId = null;
+      }
+
+      return {
+        id: randomUUID(),
+        dnaPlateId: dnaPlate.id,
+        position: pos,
+        sampleId,
+        wellType,
+        dnaConcentrationNgUl: wellType === 'SAMPLE' ? new Decimal((Math.random() * 50 + 5).toFixed(2)) : null,
+        notes: null,
+      };
+    });
+
+    await prisma.dNAPlateWell.createMany({ data: wellData });
+  }
+
+  console.log('  Created 2 DNA plates with 96 wells each');
+
+  // ---- PCR Plates ----
+
+  const pcrPlate1 = await prisma.pCRPlate.create({
+    data: {
+      id: randomUUID(),
+      sequencingRunId: run.id,
+      plateIdentifier: 'm95a_16s',
+      pcrAssay: 'ASSAY_16S',
+      datePerformed: daysAgo(7),
+      sourceDnaPlateId: dnaPlate1.id,
+      indexPlateReferenceId: indexPlate1.id,
+      isRedo: false,
+      operatorId: users['SENIOR_ANALYST'],
+      gelNotes: 'Clean bands at ~460bp for all samples. NTC clean.',
+      status: 'GEL_CHECKED',
+    },
+  });
+
+  const pcrPlate2 = await prisma.pCRPlate.create({
+    data: {
+      id: randomUUID(),
+      sequencingRunId: run.id,
+      plateIdentifier: 'm95a_EUK2',
+      pcrAssay: 'ASSAY_EUK2',
+      datePerformed: daysAgo(6),
+      sourceDnaPlateId: dnaPlate1.id,
+      indexPlateReferenceId: indexPlate2.id,
+      isRedo: false,
+      operatorId: users['SENIOR_ANALYST'],
+      gelNotes: 'Most bands at ~400bp. Faint bands for wells B03, C07.',
+      status: 'GEL_CHECKED',
+    },
+  });
+
+  // Populate PCR wells from DNA plate 1 for each PCR plate
+  const dna1Wells = await prisma.dNAPlateWell.findMany({
+    where: { dnaPlateId: dnaPlate1.id },
+    orderBy: { position: 'asc' },
+  });
+
+  const indexWells1 = await prisma.indexWell.findMany({
+    where: { indexPlateReferenceId: indexPlate1.id },
+  });
+  const indexMap1 = new Map(indexWells1.map((w) => [w.position, w]));
+
+  const indexWells2 = await prisma.indexWell.findMany({
+    where: { indexPlateReferenceId: indexPlate2.id },
+  });
+  const indexMap2 = new Map(indexWells2.map((w) => [w.position, w]));
+
+  for (const [plateIdx, pcrPlate] of [pcrPlate1, pcrPlate2].entries()) {
+    const suffix = plateIdx === 0 ? '_16s' : '_EUK2';
+    const assayLabel = plateIdx === 0 ? '16S' : 'EUK2';
+    const indexMap = plateIdx === 0 ? indexMap1 : indexMap2;
+
+    const wellData = dna1Wells.map((dw) => {
+      const idx = indexMap.get(dw.position);
+      // Assign PCR results: mostly PASS, some FAIL/BORDERLINE
+      let pcrResult: 'PCR_PENDING' | 'PASS' | 'FAIL' | 'BORDERLINE' = 'PASS';
+      if (dw.wellType === 'NTC') pcrResult = 'PASS'; // clean NTC = pass
+      else if (dw.wellType === 'EMPTY') pcrResult = 'PCR_PENDING';
+      else if (dw.position === 'B03' && plateIdx === 1) pcrResult = 'BORDERLINE';
+      else if (dw.position === 'C07' && plateIdx === 1) pcrResult = 'FAIL';
+
+      let poolingAction: 'POOL_NORMAL' | 'POOL_DOUBLE' | 'DO_NOT_POOL' | 'POOL_SKIP' = 'POOL_NORMAL';
+      if (dw.wellType === 'EMPTY') poolingAction = 'POOL_SKIP';
+      else if (pcrResult === 'FAIL') poolingAction = 'DO_NOT_POOL';
+      else if (pcrResult === 'BORDERLINE') poolingAction = 'POOL_DOUBLE';
+
+      return {
+        id: randomUUID(),
+        pcrPlateId: pcrPlate.id,
+        position: dw.position,
+        sampleLabel: dw.sampleId ? `${dw.sampleId}${suffix}` : null,
+        assayType: assayLabel,
+        wellType: dw.wellType,
+        indexI5Sequence: idx?.i5Sequence || null,
+        indexI7Sequence: idx?.i7Sequence || null,
+        mergedIndexSequence: idx ? `${idx.i5Sequence}${idx.i7Sequence}` : null,
+        pcrResult,
+        poolingAction,
+        notes: pcrResult === 'BORDERLINE' ? 'Faint band — pooling double volume' : null,
+      };
+    });
+
+    await prisma.pCRPlateWell.createMany({ data: wellData });
+  }
+
+  console.log('  Created 2 PCR plates with populated wells, indices, and results');
+
+  // ---- Pool Definition ----
+
+  const pool1 = await prisma.poolDefinition.create({
+    data: {
+      id: randomUUID(),
+      sequencingRunId: run.id,
+      poolName: 'Pool 1',
+      assayRatios: { '16S': 1, 'EUK2': 1 },
+      notes: 'Equal ratio 16S:EUK2 pool',
+    },
+  });
+
+  // Assign both PCR plates to Pool 1
+  await prisma.poolPlateAssignment.createMany({
+    data: [
+      { id: randomUUID(), poolDefinitionId: pool1.id, pcrPlateId: pcrPlate1.id },
+      { id: randomUUID(), poolDefinitionId: pool1.id, pcrPlateId: pcrPlate2.id },
+    ],
+  });
+
+  console.log('  Created pool definition with 2 plate assignments');
+
+  // ---- Reagent Inventory ----
+
+  const reagentsData = [
+    { name: 'Lysis Solution', amountOnHand: 250, minimumRequired: 100, amountToMake: 0, unit: 'mL', lot: 'LYS-2024-A' },
+    { name: 'SPRI Beads', amountOnHand: 50, minimumRequired: 25, amountToMake: 0, unit: 'mL', lot: 'SPRI-2024-B' },
+    { name: 'Flocculant', amountOnHand: 100, minimumRequired: 50, amountToMake: 0, unit: 'mL', lot: 'FLOC-2024-C' },
+    { name: 'TRIS Buffer', amountOnHand: 500, minimumRequired: 200, amountToMake: 0, unit: 'mL', lot: 'TRIS-2024-D' },
+    { name: 'Ethanol 80%', amountOnHand: 1000, minimumRequired: 500, amountToMake: 0, unit: 'mL', lot: 'ETH-2024-E' },
+    { name: 'Grit Suspension', amountOnHand: 30, minimumRequired: 10, amountToMake: 0, unit: 'mL', lot: 'GRIT-2024-F' },
+    { name: 'Soil Lysis Additive', amountOnHand: 75, minimumRequired: 25, amountToMake: 0, unit: 'mL', lot: 'SLA-2024-G' },
+    { name: 'Concentrated SPRI Beads', amountOnHand: 10, minimumRequired: 5, amountToMake: 0, unit: 'mL', lot: 'CSPRI-2024-H' },
+  ];
+
+  await prisma.runReagentInventory.createMany({
+    data: reagentsData.map((r) => ({
+      id: randomUUID(),
+      sequencingRunId: run.id,
+      reagentName: r.name,
+      amountOnHand: new Decimal(r.amountOnHand),
+      minimumRequired: new Decimal(r.minimumRequired),
+      amountToMake: new Decimal(r.amountToMake),
+      unit: r.unit,
+      lotNumber: r.lot,
+      expiryDate: daysFromNow(180),
+      notes: null,
+    })),
+  });
+
+  console.log('  Created 8 reagent inventory records');
+
+  console.log('  Metabarcoding module seeding complete!');
+
+  // =========================================================================
   // Summary
   // =========================================================================
 
@@ -1463,6 +1770,8 @@ async function main() {
   console.log(`Orders:       ${orderCounter}`);
   console.log(`Samples:      ${sampleCounter}`);
   console.log(`Invoices:     ${invoiceCounter}`);
+  console.log(`Seq Runs:     1 (m95)`);
+  console.log(`Index Plates: 2`);
   console.log('---------------------------------------------------');
   console.log('\nDefault login:');
   console.log('  Email:    admin@labflow.dev');
