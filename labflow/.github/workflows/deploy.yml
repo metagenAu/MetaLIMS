@@ -1,0 +1,187 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+        default: staging
+
+concurrency:
+  group: deploy-${{ github.event.inputs.environment || 'production' }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '20'
+  PNPM_VERSION: '9.12.0'
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      - name: Build all packages
+        run: pnpm build
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
+          NEXTAUTH_URL: ${{ vars.NEXTAUTH_URL }}
+
+      - name: Upload API build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-build
+          path: |
+            apps/api/dist
+            packages/db/prisma
+            package.json
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+          retention-days: 7
+
+      - name: Upload Web build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: |
+            apps/web/.next
+            apps/web/public
+            apps/web/package.json
+          retention-days: 7
+
+  migrate:
+    name: Run Migrations
+    needs: build
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      - name: Run database migrations
+        run: npx prisma migrate deploy
+        working-directory: packages/db
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+  deploy-api:
+    name: Deploy API
+    needs: migrate
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    steps:
+      - name: Download API build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: api-build
+
+      # ---------------------------------------------------------------
+      # Replace this section with your actual deployment steps.
+      # Examples: Docker push, AWS ECS update, Railway deploy, Fly.io, etc.
+      # ---------------------------------------------------------------
+      - name: Deploy API server
+        run: |
+          echo "Deploying API to ${{ github.event.inputs.environment || 'production' }}..."
+          echo "Replace this step with your deployment provider commands."
+          echo ""
+          echo "Example deployment targets:"
+          echo "  - Docker: docker build && docker push"
+          echo "  - AWS ECS: aws ecs update-service"
+          echo "  - Railway: railway up"
+          echo "  - Fly.io: fly deploy"
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
+
+  deploy-web:
+    name: Deploy Web App
+    needs: migrate
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    steps:
+      - name: Download Web build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-build
+
+      # ---------------------------------------------------------------
+      # Replace this section with your actual deployment steps.
+      # Examples: Vercel deploy, Netlify deploy, S3 + CloudFront, etc.
+      # ---------------------------------------------------------------
+      - name: Deploy Web application
+        run: |
+          echo "Deploying Web app to ${{ github.event.inputs.environment || 'production' }}..."
+          echo "Replace this step with your deployment provider commands."
+          echo ""
+          echo "Example deployment targets:"
+          echo "  - Vercel: vercel --prod"
+          echo "  - Netlify: netlify deploy --prod"
+          echo "  - AWS S3: aws s3 sync"
+        env:
+          NEXTAUTH_URL: ${{ vars.NEXTAUTH_URL }}
+          NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
+          NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
+
+  notify:
+    name: Notify
+    needs: [deploy-api, deploy-web]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Deployment summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ github.event.inputs.environment || 'production' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **API Deploy:** ${{ needs.deploy-api.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Web Deploy:** ${{ needs.deploy-web.result }}" >> $GITHUB_STEP_SUMMARY

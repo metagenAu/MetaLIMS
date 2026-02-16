@@ -1,0 +1,982 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// SEQUENCE TABLE (for human-readable ID generation)
+// ============================================================
+
+model Sequence {
+  id             String @id @default(uuid())
+  organizationId String
+  entityType     String // "ORDER", "SAMPLE", "INVOICE", "REPORT", "CREDIT_NOTE"
+  year           Int
+  currentValue   Int    @default(0)
+
+  @@unique([organizationId, entityType, year])
+}
+
+// ============================================================
+// ORGANIZATION & USERS
+// ============================================================
+
+model Organization {
+  id                   String       @id @default(uuid())
+  name                 String
+  slug                 String       @unique
+  address              String?
+  city                 String?
+  state                String?
+  zip                  String?
+  country              String       @default("US")
+  phone                String?
+  email                String?
+  website              String?
+  logoUrl              String?
+  licenseNumber        String?
+  accreditations       String[]
+  timezone             String       @default("America/New_York")
+  dateFormat           String       @default("MM/DD/YYYY")
+  currency             String       @default("USD")
+  fiscalYearStart      Int          @default(1)
+  defaultPaymentTerms  PaymentTerms @default(NET_30)
+  stripeAccountId      String?
+  quickbooksRealmId    String?
+  settings             Json         @default("{}")
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  users              User[]
+  clients            Client[]
+  testMethods        TestMethod[]
+  priceLists         PriceList[]
+  instruments        Instrument[]
+  storageLocations   StorageLocation[]
+  reportTemplates    ReportTemplate[]
+  workflowConfigs    WorkflowConfig[]
+  specifications     Specification[]
+
+  @@map("organizations")
+}
+
+model User {
+  id                String    @id @default(uuid())
+  organizationId    String
+  email             String
+  passwordHash      String
+  firstName         String
+  lastName          String
+  role              UserRole
+  title             String?
+  phone             String?
+  avatarUrl         String?
+  isActive          Boolean   @default(true)
+  lastLoginAt       DateTime?
+  mfaEnabled        Boolean   @default(false)
+  mfaSecret         String?
+  permissions       String[]
+  signatureUrl      String?
+  notificationPrefs Json      @default("{}")
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  deletedAt         DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  samplesCreated  Sample[]         @relation("SampleCreator")
+  testsAssigned   Test[]           @relation("TestAnalyst")
+  testsReviewed   Test[]           @relation("TestReviewer")
+  testsApproved   Test[]           @relation("TestApprover")
+  approvalActions ApprovalAction[]
+  auditLogs       AuditLog[]
+
+  @@unique([organizationId, email])
+  @@map("users")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  LAB_DIRECTOR
+  LAB_MANAGER
+  SENIOR_ANALYST
+  ANALYST
+  SAMPLE_RECEIVER
+  DATA_ENTRY
+  BILLING_ADMIN
+  BILLING_VIEWER
+  CLIENT_ADMIN
+  CLIENT_USER
+  READONLY
+}
+
+// ============================================================
+// CLIENTS & PROJECTS
+// ============================================================
+
+model Client {
+  id                     String       @id @default(uuid())
+  organizationId         String
+  name                   String
+  code                   String
+  type                   ClientType   @default(COMMERCIAL)
+  contactFirstName       String?
+  contactLastName        String?
+  contactEmail           String?
+  contactPhone           String?
+  address                String?
+  city                   String?
+  state                  String?
+  zip                    String?
+  country                String       @default("US")
+  billingEmail           String?
+  billingAddress         String?
+  billingCity            String?
+  billingState           String?
+  billingZip             String?
+  billingCountry         String?
+  paymentTerms           PaymentTerms @default(NET_30)
+  creditLimit            Decimal?     @db.Decimal(12, 2)
+  taxExempt              Boolean      @default(false)
+  taxExemptId            String?
+  priceListId            String?
+  stripeCustomerId       String?
+  defaultPaymentMethodId String?
+  purchaseOrderRequired  Boolean      @default(false)
+  autoInvoice            Boolean      @default(true)
+  codHold                Boolean      @default(false)
+  defaultTurnaroundDays  Int          @default(5)
+  notes                  String?
+  tags                   String[]
+  isActive               Boolean      @default(true)
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+  deletedAt              DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  priceList    PriceList?   @relation(fields: [priceListId], references: [id])
+
+  projects Project[]
+  orders   Order[]
+  invoices Invoice[]
+  payments Payment[]
+  contacts ClientContact[]
+
+  @@unique([organizationId, code])
+  @@map("clients")
+}
+
+enum ClientType {
+  COMMERCIAL
+  GOVERNMENT
+  ACADEMIC
+  INTERNAL
+  INDIVIDUAL
+}
+
+enum PaymentTerms {
+  PREPAID
+  COD
+  NET_15
+  NET_30
+  NET_45
+  NET_60
+  NET_90
+  CUSTOM
+}
+
+model ClientContact {
+  id              String   @id @default(uuid())
+  clientId        String
+  firstName       String
+  lastName        String
+  email           String
+  phone           String?
+  title           String?
+  isPrimary       Boolean  @default(false)
+  receiveReports  Boolean  @default(true)
+  receiveInvoices Boolean  @default(false)
+  isPortalUser    Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id])
+
+  @@map("client_contacts")
+}
+
+model Project {
+  id                   String   @id @default(uuid())
+  clientId             String
+  name                 String
+  code                 String
+  description          String?
+  isActive             Boolean  @default(true)
+  defaultTestMethodIds String[]
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  client Client  @relation(fields: [clientId], references: [id])
+  orders Order[]
+
+  @@unique([clientId, code])
+  @@map("projects")
+}
+
+// ============================================================
+// ORDERS & SAMPLES
+// ============================================================
+
+model Order {
+  id                    String      @id @default(uuid())
+  organizationId        String
+  clientId              String
+  projectId             String?
+  orderNumber           String
+  status                OrderStatus @default(DRAFT)
+  priority              Priority    @default(NORMAL)
+  clientPO              String?
+  clientReference       String?
+  receivedDate          DateTime?
+  dueDate               DateTime?
+  completedDate         DateTime?
+  turnaroundDays        Int?
+  rushRequested         Boolean     @default(false)
+  rushApproved          Boolean     @default(false)
+  rushSurchargePercent  Decimal?    @db.Decimal(5, 2)
+  shippingMethod        String?
+  trackingNumber        String?
+  temperature           String?
+  conditionOnReceipt    String?
+  notes                 String?
+  internalNotes         String?
+  attachments           Json        @default("[]")
+  createdById           String?
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  client  Client   @relation(fields: [clientId], references: [id])
+  project Project? @relation(fields: [projectId], references: [id])
+
+  samples          Sample[]
+  invoiceLineItems InvoiceLineItem[]
+
+  @@unique([organizationId, orderNumber])
+  @@map("orders")
+}
+
+enum OrderStatus {
+  DRAFT
+  SUBMITTED
+  RECEIVED
+  IN_PROGRESS
+  TESTING_COMPLETE
+  IN_REVIEW
+  APPROVED
+  REPORTED
+  COMPLETED
+  ON_HOLD
+  CANCELLED
+}
+
+enum Priority {
+  LOW
+  NORMAL
+  HIGH
+  RUSH
+  EMERGENCY
+}
+
+model Sample {
+  id                   String       @id @default(uuid())
+  organizationId       String
+  orderId              String
+  sampleNumber         String
+  clientSampleId       String?
+  name                 String?
+  description          String?
+  matrix               String?
+  sampleType           String?
+  collectedDate        DateTime?
+  collectedBy          String?
+  collectionLocation   String?
+  collectionMethod     String?
+  receivedDate         DateTime?
+  receivedById         String?
+  conditionOnReceipt   String?
+  temperatureOnReceipt Decimal?     @db.Decimal(5, 2)
+  status               SampleStatus @default(REGISTERED)
+  storageLocationId    String?
+  storageCondition     String?
+  disposalDate         DateTime?
+  disposalMethod       String?
+  disposedById         String?
+  parentSampleId       String?
+  barcodeValue         String       @unique
+  barcodeFormat        String       @default("CODE128")
+  quantity             Decimal?     @db.Decimal(10, 2)
+  quantityUnit         String?
+  lotNumber            String?
+  batchNumber          String?
+  expirationDate       DateTime?
+  tags                 String[]
+  customFields         Json         @default("{}")
+  notes                String?
+  attachments          Json         @default("[]")
+  createdById          String?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  order           Order            @relation(fields: [orderId], references: [id])
+  storageLocation StorageLocation? @relation(fields: [storageLocationId], references: [id])
+  parentSample    Sample?          @relation("SampleAliquots", fields: [parentSampleId], references: [id])
+  childSamples    Sample[]         @relation("SampleAliquots")
+  createdBy       User?            @relation("SampleCreator", fields: [createdById], references: [id])
+
+  tests            Test[]
+  chainOfCustody   ChainOfCustodyEntry[]
+
+  @@unique([organizationId, sampleNumber])
+  @@map("samples")
+}
+
+enum SampleStatus {
+  REGISTERED
+  RECEIVED
+  IN_STORAGE
+  IN_PROGRESS
+  TESTING_COMPLETE
+  APPROVED
+  REPORTED
+  ON_HOLD
+  DISPOSED
+  REJECTED
+  CANCELLED
+}
+
+model ChainOfCustodyEntry {
+  id            String   @id @default(uuid())
+  sampleId      String
+  action        String
+  fromLocation  String?
+  toLocation    String?
+  performedById String
+  performedAt   DateTime @default(now())
+  notes         String?
+  signatureUrl  String?
+  temperature   Decimal? @db.Decimal(5, 2)
+
+  sample Sample @relation(fields: [sampleId], references: [id])
+
+  @@map("chain_of_custody_entries")
+}
+
+// ============================================================
+// TESTING & RESULTS
+// ============================================================
+
+model TestMethod {
+  id                    String   @id @default(uuid())
+  organizationId        String
+  code                  String
+  name                  String
+  category              String?
+  subcategory           String?
+  description           String?
+  methodology           String?
+  sampleMatrices        String[]
+  minimumSampleSize     Decimal? @db.Decimal(10, 2)
+  sampleSizeUnit        String?
+  holdTime              Int?
+  defaultTurnaroundDays Int      @default(5)
+  rushAvailable         Boolean  @default(true)
+  rushTurnaroundDays    Int?
+  requiresCalibration   Boolean  @default(false)
+  qcRequirements        Json     @default("{}")
+  accreditedMethod      Boolean  @default(false)
+  accreditationScope    String?
+  isActive              Boolean  @default(true)
+  sortOrder             Int      @default(0)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  analytes       TestAnalyte[]
+  tests          Test[]
+  specifications Specification[]
+  priceListItems PriceListItem[]
+
+  @@unique([organizationId, code])
+  @@map("test_methods")
+}
+
+model TestAnalyte {
+  id             String   @id @default(uuid())
+  testMethodId   String
+  name           String
+  code           String
+  unit           String
+  decimalPlaces  Int      @default(2)
+  reportingLimit Decimal? @db.Decimal(15, 6)
+  sortOrder      Int      @default(0)
+  isActive       Boolean  @default(true)
+
+  testMethod TestMethod         @relation(fields: [testMethodId], references: [id])
+  results    TestResult[]
+  specLimits SpecificationLimit[]
+
+  @@unique([testMethodId, code])
+  @@map("test_analytes")
+}
+
+model Test {
+  id             String     @id @default(uuid())
+  sampleId       String
+  testMethodId   String
+  status         TestStatus @default(PENDING)
+  priority       Priority   @default(NORMAL)
+  assignedToId   String?
+  assignedDate   DateTime?
+  startedDate    DateTime?
+  completedDate  DateTime?
+  instrumentId   String?
+  batchId        String?
+  reviewedById   String?
+  reviewedDate   DateTime?
+  reviewNotes    String?
+  approvedById   String?
+  approvedDate   DateTime?
+  approvalNotes  String?
+  overallResult  OverallResult?
+  notes          String?
+  internalNotes  String?
+  deviations     String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  sample     Sample      @relation(fields: [sampleId], references: [id])
+  testMethod TestMethod  @relation(fields: [testMethodId], references: [id])
+  assignedTo User?       @relation("TestAnalyst", fields: [assignedToId], references: [id])
+  reviewedBy User?       @relation("TestReviewer", fields: [reviewedById], references: [id])
+  approvedBy User?       @relation("TestApprover", fields: [approvedById], references: [id])
+  instrument Instrument? @relation(fields: [instrumentId], references: [id])
+
+  results         TestResult[]
+  approvalActions ApprovalAction[]
+
+  @@map("tests")
+}
+
+enum TestStatus {
+  PENDING
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  IN_REVIEW
+  REVIEW_REJECTED
+  APPROVED
+  CANCELLED
+  ON_HOLD
+}
+
+enum OverallResult {
+  PASS
+  FAIL
+  INCONCLUSIVE
+  NOT_DETECTED
+  DETECTED
+}
+
+model TestResult {
+  id              String      @id @default(uuid())
+  testId          String
+  analyteId       String
+  rawValue        String?
+  finalValue      String?
+  numericValue    Decimal?    @db.Decimal(15, 6)
+  unit            String?
+  qualifier       String?
+  isDetected      Boolean?
+  specificationId String?
+  passStatus      PassStatus?
+  specMin         Decimal?    @db.Decimal(15, 6)
+  specMax         Decimal?    @db.Decimal(15, 6)
+  specTarget      Decimal?    @db.Decimal(15, 6)
+  dilutionFactor  Decimal?    @db.Decimal(10, 4)
+  recoveryPercent Decimal?    @db.Decimal(8, 4)
+  rpdPercent      Decimal?    @db.Decimal(8, 4)
+  notes           String?
+  enteredById     String?
+  enteredAt       DateTime    @default(now())
+  modifiedAt      DateTime    @updatedAt
+
+  test          Test           @relation(fields: [testId], references: [id])
+  analyte       TestAnalyte    @relation(fields: [analyteId], references: [id])
+  specification Specification? @relation(fields: [specificationId], references: [id])
+
+  @@map("test_results")
+}
+
+enum PassStatus {
+  PASS
+  FAIL
+  WARNING
+  NOT_APPLICABLE
+}
+
+// ============================================================
+// SPECIFICATIONS
+// ============================================================
+
+model Specification {
+  id              String    @id @default(uuid())
+  organizationId  String
+  name            String
+  code            String
+  description     String?
+  regulatoryBody  String?
+  effectiveDate   DateTime?
+  expirationDate  DateTime?
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  testMethodId    String
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  testMethod   TestMethod   @relation(fields: [testMethodId], references: [id])
+
+  limits  SpecificationLimit[]
+  results TestResult[]
+
+  @@unique([organizationId, code])
+  @@map("specifications")
+}
+
+model SpecificationLimit {
+  id              String    @id @default(uuid())
+  specificationId String
+  analyteId       String
+  limitType       LimitType
+  minValue        Decimal?  @db.Decimal(15, 6)
+  maxValue        Decimal?  @db.Decimal(15, 6)
+  targetValue     Decimal?  @db.Decimal(15, 6)
+  warningMin      Decimal?  @db.Decimal(15, 6)
+  warningMax      Decimal?  @db.Decimal(15, 6)
+  unit            String?
+  actionOnFail    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  specification Specification @relation(fields: [specificationId], references: [id])
+  analyte       TestAnalyte   @relation(fields: [analyteId], references: [id])
+
+  @@unique([specificationId, analyteId])
+  @@map("specification_limits")
+}
+
+enum LimitType {
+  MAXIMUM
+  MINIMUM
+  RANGE
+  EXACT
+  INFORMATIONAL
+}
+
+// ============================================================
+// APPROVAL WORKFLOW
+// ============================================================
+
+model WorkflowConfig {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  entityType     String
+  steps          Json
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@map("workflow_configs")
+}
+
+model ApprovalAction {
+  id             String             @id @default(uuid())
+  entityType     String
+  entityId       String
+  action         ApprovalActionType
+  level          Int
+  performedById  String
+  performedAt    DateTime           @default(now())
+  comments       String?
+  signatureUrl   String?
+  previousStatus String?
+  newStatus      String?
+
+  performedBy User @relation(fields: [performedById], references: [id])
+  test        Test? @relation(fields: [entityId], references: [id])
+
+  @@map("approval_actions")
+}
+
+enum ApprovalActionType {
+  SUBMIT_FOR_REVIEW
+  REVIEW_APPROVE
+  REVIEW_REJECT
+  APPROVE
+  REJECT
+  CANCEL
+  REOPEN
+}
+
+// ============================================================
+// INSTRUMENTS & STORAGE
+// ============================================================
+
+model Instrument {
+  id                    String            @id @default(uuid())
+  organizationId        String
+  name                  String
+  type                  String?
+  manufacturer          String?
+  model                 String?
+  serialNumber          String?
+  location              String?
+  lastCalibrationDate   DateTime?
+  nextCalibrationDate   DateTime?
+  calibrationFrequency  Int?
+  calibrationStatus     CalibrationStatus @default(CURRENT)
+  isActive              Boolean           @default(true)
+  notes                 String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  tests        Test[]
+
+  @@map("instruments")
+}
+
+enum CalibrationStatus {
+  CURRENT
+  DUE_SOON
+  OVERDUE
+  OUT_OF_SERVICE
+}
+
+model StorageLocation {
+  id               String   @id @default(uuid())
+  organizationId   String
+  name             String
+  type             String?
+  building         String?
+  room             String?
+  temperature      String?
+  capacity         Int?
+  currentCount     Int      @default(0)
+  isActive         Boolean  @default(true)
+  parentLocationId String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  organization   Organization      @relation(fields: [organizationId], references: [id])
+  parentLocation StorageLocation?  @relation("StorageHierarchy", fields: [parentLocationId], references: [id])
+  childLocations StorageLocation[] @relation("StorageHierarchy")
+  samples        Sample[]
+
+  @@map("storage_locations")
+}
+
+// ============================================================
+// BILLING & PAYMENTS
+// ============================================================
+
+model PriceList {
+  id             String    @id @default(uuid())
+  organizationId String
+  name           String
+  code           String
+  currency       String    @default("USD")
+  effectiveDate  DateTime
+  expirationDate DateTime?
+  isDefault      Boolean   @default(false)
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id])
+  items        PriceListItem[]
+  clients      Client[]
+
+  @@unique([organizationId, code])
+  @@map("price_lists")
+}
+
+model PriceListItem {
+  id                   String   @id @default(uuid())
+  priceListId          String
+  testMethodId         String
+  unitPrice            Decimal  @db.Decimal(12, 2)
+  rushSurchargePercent Decimal? @db.Decimal(5, 2)
+  minimumCharge        Decimal? @db.Decimal(12, 2)
+  volumeTiers          Json     @default("[]")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  priceList  PriceList  @relation(fields: [priceListId], references: [id])
+  testMethod TestMethod @relation(fields: [testMethodId], references: [id])
+
+  @@unique([priceListId, testMethodId])
+  @@map("price_list_items")
+}
+
+model Invoice {
+  id                  String        @id @default(uuid())
+  organizationId      String
+  clientId            String
+  invoiceNumber       String
+  status              InvoiceStatus @default(DRAFT)
+  issueDate           DateTime?
+  dueDate             DateTime?
+  paidDate            DateTime?
+  subtotal            Decimal       @db.Decimal(12, 2)
+  discountAmount      Decimal       @default(0) @db.Decimal(12, 2)
+  discountPercent     Decimal?      @db.Decimal(5, 2)
+  taxRate             Decimal       @default(0) @db.Decimal(5, 4)
+  taxAmount           Decimal       @default(0) @db.Decimal(12, 2)
+  rushSurcharge       Decimal       @default(0) @db.Decimal(12, 2)
+  total               Decimal       @db.Decimal(12, 2)
+  balanceDue          Decimal       @db.Decimal(12, 2)
+  paymentTerms        PaymentTerms
+  clientPO            String?
+  stripeInvoiceId     String?
+  quickbooksInvoiceId String?
+  notes               String?
+  internalNotes       String?
+  sentAt              DateTime?
+  sentToEmails        String[]
+  createdById         String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  voidedAt            DateTime?
+  voidedById          String?
+  voidReason          String?
+
+  client      Client            @relation(fields: [clientId], references: [id])
+  lineItems   InvoiceLineItem[]
+  payments    Payment[]
+  creditNotes CreditNote[]
+
+  @@unique([organizationId, invoiceNumber])
+  @@map("invoices")
+}
+
+enum InvoiceStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  SENT
+  VIEWED
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  VOID
+  WRITTEN_OFF
+}
+
+model InvoiceLineItem {
+  id             String   @id @default(uuid())
+  invoiceId      String
+  orderId        String?
+  description    String
+  testMethodCode String?
+  sampleCount    Int      @default(1)
+  quantity       Decimal  @db.Decimal(10, 2)
+  unitPrice      Decimal  @db.Decimal(12, 2)
+  discount       Decimal  @default(0) @db.Decimal(12, 2)
+  total          Decimal  @db.Decimal(12, 2)
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+  order   Order?  @relation(fields: [orderId], references: [id])
+
+  @@map("invoice_line_items")
+}
+
+model Payment {
+  id              String        @id @default(uuid())
+  organizationId  String
+  invoiceId       String?
+  clientId        String
+  amount          Decimal       @db.Decimal(12, 2)
+  method          PaymentMethod
+  status          PaymentStatus @default(PENDING)
+  referenceNumber String?
+  stripePaymentId String?
+  stripeChargeId  String?
+  paymentDate     DateTime
+  processedAt     DateTime?
+  notes           String?
+  recordedById    String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  invoice Invoice? @relation(fields: [invoiceId], references: [id])
+  client  Client   @relation(fields: [clientId], references: [id])
+
+  @@map("payments")
+}
+
+enum PaymentMethod {
+  CREDIT_CARD
+  ACH
+  WIRE_TRANSFER
+  CHECK
+  CASH
+  STRIPE
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  CANCELLED
+}
+
+model CreditNote {
+  id           String   @id @default(uuid())
+  invoiceId    String
+  creditNumber String
+  amount       Decimal  @db.Decimal(12, 2)
+  reason       String
+  status       String   @default("ISSUED")
+  issuedById   String?
+  createdAt    DateTime @default(now())
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  @@map("credit_notes")
+}
+
+// ============================================================
+// REPORTS
+// ============================================================
+
+model Report {
+  id                String       @id @default(uuid())
+  organizationId    String
+  orderId           String
+  reportNumber      String
+  type              ReportType   @default(COA)
+  status            ReportStatus @default(DRAFT)
+  templateId        String?
+  generatedFileKey  String?
+  approvedById      String?
+  approvedAt        DateTime?
+  signatureUrl      String?
+  sentAt            DateTime?
+  sentToEmails      String[]
+  viewedAt          DateTime?
+  downloadedAt      DateTime?
+  version           Int          @default(1)
+  previousVersionId String?
+  isAmended         Boolean      @default(false)
+  amendmentReason   String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  template ReportTemplate? @relation(fields: [templateId], references: [id])
+
+  @@unique([organizationId, reportNumber])
+  @@map("reports")
+}
+
+enum ReportType {
+  COA
+  PARTIAL
+  AMENDED
+  SUMMARY
+  CHAIN_OF_CUSTODY
+}
+
+enum ReportStatus {
+  DRAFT
+  GENERATED
+  IN_REVIEW
+  APPROVED
+  SENT
+  VIEWED
+  AMENDED
+}
+
+model ReportTemplate {
+  id             String     @id @default(uuid())
+  organizationId String
+  name           String
+  type           ReportType
+  template       Json
+  headerHtml     String?
+  footerHtml     String?
+  isDefault      Boolean    @default(false)
+  isActive       Boolean    @default(true)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  reports      Report[]
+
+  @@map("report_templates")
+}
+
+// ============================================================
+// AUDIT & NOTIFICATIONS
+// ============================================================
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  organizationId String
+  userId         String?
+  entityType     String
+  entityId       String
+  action         String
+  changes        Json
+  metadata       Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, entityType, entityId])
+  @@index([organizationId, createdAt])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id             String    @id @default(uuid())
+  organizationId String
+  userId         String
+  type           String
+  title          String
+  message        String
+  entityType     String?
+  entityId       String?
+  channel        String
+  isRead         Boolean   @default(false)
+  readAt         DateTime?
+  emailSentAt    DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
