@@ -106,6 +106,16 @@ export const Permission = {
   // Price Lists
   PRICE_LISTS_VIEW: 'price_lists:view',
   PRICE_LISTS_MANAGE: 'price_lists:manage',
+
+  // Sequencing / Metabarcoding
+  SEQUENCING_VIEW: 'sequencing:view',
+  SEQUENCING_CREATE: 'sequencing:create',
+  SEQUENCING_EDIT: 'sequencing:edit',
+  SEQUENCING_DELETE: 'sequencing:delete',
+  SEQUENCING_ENTER_RESULTS: 'sequencing:enter_results',
+  SEQUENCING_EXPORT: 'sequencing:export',
+  INDEX_PLATES_VIEW: 'index_plates:view',
+  INDEX_PLATES_MANAGE: 'index_plates:manage',
 } as const;
 
 export type Permission = (typeof Permission)[keyof typeof Permission];
@@ -288,6 +298,14 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     Permission.WORKFLOW_MANAGE,
     Permission.PRICE_LISTS_VIEW,
     Permission.PRICE_LISTS_MANAGE,
+    Permission.SEQUENCING_VIEW,
+    Permission.SEQUENCING_CREATE,
+    Permission.SEQUENCING_EDIT,
+    Permission.SEQUENCING_DELETE,
+    Permission.SEQUENCING_ENTER_RESULTS,
+    Permission.SEQUENCING_EXPORT,
+    Permission.INDEX_PLATES_VIEW,
+    Permission.INDEX_PLATES_MANAGE,
   ],
 
   LAB_MANAGER: [
@@ -336,6 +354,14 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     Permission.SPECS_EDIT,
     Permission.WORKFLOW_VIEW,
     Permission.PRICE_LISTS_VIEW,
+    Permission.SEQUENCING_VIEW,
+    Permission.SEQUENCING_CREATE,
+    Permission.SEQUENCING_EDIT,
+    Permission.SEQUENCING_DELETE,
+    Permission.SEQUENCING_ENTER_RESULTS,
+    Permission.SEQUENCING_EXPORT,
+    Permission.INDEX_PLATES_VIEW,
+    Permission.INDEX_PLATES_MANAGE,
   ],
 
   SENIOR_ANALYST: [
@@ -358,6 +384,11 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     Permission.REPORTS_CREATE,
     Permission.STORAGE_VIEW,
     Permission.SPECS_VIEW,
+    Permission.SEQUENCING_VIEW,
+    Permission.SEQUENCING_EDIT,
+    Permission.SEQUENCING_ENTER_RESULTS,
+    Permission.SEQUENCING_EXPORT,
+    Permission.INDEX_PLATES_VIEW,
   ],
 
   ANALYST: [
@@ -371,6 +402,10 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     Permission.INSTRUMENTS_VIEW,
     Permission.STORAGE_VIEW,
     Permission.SPECS_VIEW,
+    Permission.SEQUENCING_VIEW,
+    Permission.SEQUENCING_ENTER_RESULTS,
+    Permission.SEQUENCING_EXPORT,
+    Permission.INDEX_PLATES_VIEW,
   ],
 
   SAMPLE_RECEIVER: [
@@ -458,6 +493,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     Permission.PAYMENTS_VIEW,
     Permission.STORAGE_VIEW,
     Permission.SPECS_VIEW,
+    Permission.SEQUENCING_VIEW,
+    Permission.INDEX_PLATES_VIEW,
   ],
 };
 
