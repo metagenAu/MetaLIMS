@@ -18,6 +18,7 @@ import {
   ChevronRight,
   ChevronDown,
   Beaker,
+  Activity,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -33,6 +34,11 @@ const navigation: NavItem[] = [
     label: 'Dashboard',
     href: '/dashboard',
     icon: LayoutDashboard,
+  },
+  {
+    label: 'Sample Tracking',
+    href: '/sample-tracking',
+    icon: Activity,
   },
   {
     label: 'Samples',

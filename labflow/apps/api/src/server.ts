@@ -172,6 +172,10 @@ export async function buildServer(): Promise<FastifyInstance> {
       await v1.register(import('./routes/audit/index.js'), { prefix: '/audit' });
       await v1.register(import('./routes/webhooks/index.js'), { prefix: '/webhooks' });
 
+      // Sample Tracking & Analysis Batches
+      await v1.register((await import('./routes/sampleTracking/index.js')).default, { prefix: '/sample-tracking' });
+      await v1.register((await import('./routes/analysisBatches/index.js')).default, { prefix: '/analysis-batches' });
+
       // Metabarcoding / Sequencing module
       await v1.register((await import('./routes/sequencingRuns/index.js')).default, { prefix: '/sequencing-runs' });
       await v1.register((await import('./routes/indexPlates/index.js')).default, { prefix: '/index-plates' });

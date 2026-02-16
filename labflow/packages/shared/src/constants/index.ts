@@ -118,3 +118,19 @@ export {
   type AssayInfo,
   type ReagentFormula,
 } from './pcrAssays';
+
+export {
+  WORKFLOW_CATEGORIES,
+  SOIL_HEALTH_STAGES,
+  METABARCODING_STAGES,
+  GENERAL_CHEMISTRY_STAGES,
+  DEFAULT_STAGES_BY_CATEGORY,
+  getDefaultStages,
+  getCategoryLabel,
+  BATCH_STATUS_INFO,
+  BATCH_STATUS_TRANSITIONS,
+  isValidBatchTransition,
+  type DefaultStageDefinition,
+  type WorkflowCategoryInfo,
+  type BatchStatusInfo,
+} from './workflowStages';

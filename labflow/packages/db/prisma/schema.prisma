@@ -194,11 +194,12 @@ model Client {
   organization Organization @relation(fields: [organizationId], references: [id])
   priceList    PriceList?   @relation(fields: [priceListId], references: [id])
 
-  projects Project[]
-  orders   Order[]
-  invoices Invoice[]
-  payments Payment[]
-  contacts ClientContact[]
+  projects     Project[]
+  orders       Order[]
+  invoices     Invoice[]
+  payments     Payment[]
+  contacts     ClientContact[]
+  alertConfigs ClientAlertConfig[]
 
   @@unique([organizationId, code])
   @@map("clients")
@@ -375,6 +376,8 @@ model Sample {
 
   tests            Test[]
   chainOfCustody   ChainOfCustodyEntry[]
+  stageLogs        SampleStageLog[]
+  batchItems       AnalysisBatchItem[]
 
   @@unique([organizationId, sampleNumber])
   @@index([orderId])
@@ -1108,6 +1111,7 @@ model SequencingRun {
   pcrPlates        PCRPlate[]
   poolDefinitions  PoolDefinition[]
   reagentInventory RunReagentInventory[]
+  analysisBatches  AnalysisBatch[]
 
   @@unique([organizationId, runIdentifier])
   @@index([organizationId, status])
@@ -1301,4 +1305,173 @@ model RunReagentInventory {
   sequencingRun SequencingRun @relation(fields: [sequencingRunId], references: [id], onDelete: Cascade)
 
   @@map("run_reagent_inventory")
+}
+
+// ============================================================
+// SAMPLE TRACKING / WORKFLOW STAGES
+// ============================================================
+
+/// Configurable workflow stage definitions per test-method category.
+/// Each organization can define its own pipeline stages (e.g. soil health
+/// has: Registered → Weighing → DNA Extraction → PCR → Sequencing →
+/// Bioinformatics → Results Ready → Report Sent).
+model WorkflowStageDefinition {
+  id                    String   @id @default(uuid())
+  organizationId        String
+  category              String   // e.g. "SOIL_HEALTH", "WATER_CHEMISTRY", "METABARCODING"
+  stageKey              String   // machine-readable: "WEIGHING", "DNA_EXTRACTION", "PCR", etc.
+  label                 String   // human-readable: "Weighing", "DNA Extraction", etc.
+  description           String?
+  sortOrder             Int      @default(0)
+  color                 String?  // hex colour for UI badges / kanban columns
+  isTerminal            Boolean  @default(false) // true for final stages
+  expectedDurationHours Int?     // target hours at this stage (for TAT KPIs)
+  isActive              Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  stageLogs SampleStageLog[]
+
+  @@unique([organizationId, category, stageKey])
+  @@index([organizationId, category, sortOrder])
+  @@map("workflow_stage_definitions")
+}
+
+/// Immutable audit trail of sample stage transitions.  Every time a sample
+/// moves to a new stage in a workflow, a row is appended here.  When the
+/// sample leaves a stage the `exitedAt` + `durationMinutes` are back-filled.
+model SampleStageLog {
+  id              String    @id @default(uuid())
+  organizationId  String
+  sampleId        String
+  testId          String?   // optionally link to a specific test
+  batchId         String?   // optionally link to an AnalysisBatch
+  stageDefinitionId String
+  category        String    // denormalised from WorkflowStageDefinition for fast queries
+  stageKey        String    // denormalised
+  enteredAt       DateTime  @default(now())
+  exitedAt        DateTime?
+  durationMinutes Int?      // computed on exit: diff(exitedAt, enteredAt)
+  performedById   String?
+  notes           String?
+
+  sample          Sample                  @relation(fields: [sampleId], references: [id])
+  stageDefinition WorkflowStageDefinition @relation(fields: [stageDefinitionId], references: [id])
+
+  @@index([sampleId, category])
+  @@index([organizationId, category, stageKey])
+  @@index([organizationId, enteredAt])
+  @@map("sample_stage_logs")
+}
+
+// ============================================================
+// ANALYSIS BATCHES (formal grouping for processing & billing)
+// ============================================================
+
+enum AnalysisBatchStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+/// A batch groups samples/tests for joint processing and billing.
+/// For sequencing workflows this maps 1:1 to a SequencingRun; for
+/// chemistry workflows it groups tests run on the same instrument run.
+model AnalysisBatch {
+  id              String               @id @default(uuid())
+  organizationId  String
+  batchNumber     String               // auto-generated: "BATCH-2025-0001"
+  category        String               // "SOIL_HEALTH", "WATER_CHEMISTRY", etc.
+  status          AnalysisBatchStatus   @default(OPEN)
+  description     String?
+  sequencingRunId String?              // optional link to SequencingRun
+  targetStageKey  String?              // which workflow stage this batch covers
+  createdById     String?
+  openedAt        DateTime             @default(now())
+  closedAt        DateTime?
+  dueDate         DateTime?
+  notes           String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  sequencingRun SequencingRun? @relation(fields: [sequencingRunId], references: [id])
+  items         AnalysisBatchItem[]
+
+  @@unique([organizationId, batchNumber])
+  @@index([organizationId, status])
+  @@index([organizationId, category])
+  @@map("analysis_batches")
+}
+
+/// A single sample (and optionally a test) within a batch.  Supports re-runs:
+/// when a sample needs to be re-processed, a new item is created with
+/// `isRerun = true` pointing back to the original item via `rerunOfItemId`.
+model AnalysisBatchItem {
+  id            String    @id @default(uuid())
+  batchId       String
+  sampleId      String
+  testId        String?
+  position      Int?      // optional ordering / plate position within the batch
+  isRerun       Boolean   @default(false)
+  rerunReason   String?   // why this sample is being re-processed
+  rerunOfItemId String?   // FK to the original item that failed / needs redo
+  status        String    @default("PENDING") // PENDING, IN_PROGRESS, COMPLETED, FAILED
+  addedAt       DateTime  @default(now())
+  completedAt   DateTime?
+  notes         String?
+
+  batch       AnalysisBatch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  sample      Sample             @relation(fields: [sampleId], references: [id])
+  rerunOfItem AnalysisBatchItem? @relation("BatchItemRerun", fields: [rerunOfItemId], references: [id])
+  reruns      AnalysisBatchItem[] @relation("BatchItemRerun")
+
+  @@index([batchId])
+  @@index([sampleId])
+  @@map("analysis_batch_items")
+}
+
+// ============================================================
+// CLIENT ALERT CONFIGURATION
+// ============================================================
+
+/// Per-client, per-alert-type configuration.  Controls which stage
+/// transitions trigger emails to the client and who receives them.
+model ClientAlertConfig {
+  id              String   @id @default(uuid())
+  clientId        String
+  alertType       String   // "STAGE_CHANGE", "BATCH_COMPLETE", "RESULTS_READY", "REPORT_SENT", "RUN_SUBMITTED"
+  enabled         Boolean  @default(true)
+  emailRecipients String[] // override list; falls back to client contacts if empty
+  webhookUrl      String?  // optional external webhook
+  stageKeys       String[] // which stages trigger this alert (empty = all)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id])
+
+  @@unique([clientId, alertType])
+  @@map("client_alert_configs")
+}
+
+/// Log of every client-facing alert sent, for audit and dedup.
+model ClientAlertLog {
+  id             String   @id @default(uuid())
+  organizationId String
+  clientId       String
+  alertType      String
+  channel        String   // "EMAIL", "WEBHOOK", "BOTH"
+  subject        String
+  body           String?
+  entityType     String?  // "SAMPLE", "ORDER", "BATCH"
+  entityId       String?
+  recipients     String[]
+  sentAt         DateTime @default(now())
+  status         String   @default("SENT") // "SENT", "FAILED", "BOUNCED"
+  errorMessage   String?
+
+  @@index([clientId, sentAt])
+  @@index([organizationId, sentAt])
+  @@map("client_alert_logs")
 }
