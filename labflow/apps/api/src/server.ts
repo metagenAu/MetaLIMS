@@ -152,6 +152,10 @@ export async function buildServer(): Promise<FastifyInstance> {
       //   await v1.register(import('./routes/instruments.js'), { prefix: '/instruments' });
       //   await v1.register(import('./routes/users.js'), { prefix: '/users' });
 
+      // Metabarcoding / Sequencing module
+      await v1.register((await import('./routes/sequencingRuns/index.js')).default, { prefix: '/sequencing-runs' });
+      await v1.register((await import('./routes/indexPlates/index.js')).default, { prefix: '/index-plates' });
+
       // Default 404 for the v1 scope
       v1.setNotFoundHandler(async (request, _reply) => {
         return {
